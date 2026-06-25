@@ -1,0 +1,37 @@
+[project]
+name = "home-credit-mlops"
+version = "0.1.0"
+description = "Credit scoring project with MLflow tracking and a script-first MLOps workflow"
+authors = [
+    { name = "Maxime", email = "maximebarbier57@gmail.com" }
+]
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy>=1.26,<3.0",
+    "pandas>=2.2,<3.0",
+    "pyarrow>=16,<21",
+    "scikit-learn>=1.5,<2.0",
+    "mlflow>=2.14,<4.0",
+    "matplotlib>=3.9,<4.0",
+    "seaborn>=0.13,<1.0",
+    "shap==0.51.0",
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+packages = [{ include = "home_credit_mlops", from = "src" }]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.0"
+ruff = "^0.12.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
