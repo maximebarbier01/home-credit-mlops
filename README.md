@@ -4,8 +4,10 @@ Base project for the OpenClassrooms "Initiez-vous au MLOps" credit scoring exerc
 
 This repository is organized around Python scripts instead of notebooks:
 
-- `scripts/eda.py` for exploratory analysis
-- `scripts/prepare_dataset.py` for a first cleaned dataset export
+- `scripts/profile_home_credit_raw.py` for a raw-table overview and missing-value profiling
+- `scripts/build_home_credit_dataset.py` for the full step-1 cleaning, aggregation, and merge pipeline
+- `scripts/eda.py` for exploratory analysis on a single exported table
+- `scripts/prepare_dataset.py` for a generic first cleaned dataset export
 - `scripts/compare_models.py` for model comparison with MLflow tracking
 - `scripts/train_model.py` for single-model training
 - `scripts/mlflow_ui.py` to start the MLflow UI
@@ -46,16 +48,16 @@ poetry install
 ## Suggested workflow
 
 1. Put the Kaggle files in `data/raw/`
-2. Generate a first report:
+2. Profile the raw Home Credit tables:
 
 ```bash
-poetry run python scripts/eda.py --input data/raw/application_train.csv --target TARGET
+poetry run python scripts/profile_home_credit_raw.py
 ```
 
-3. Export a first processed table:
+3. Build the cleaned and aggregated feature dataset:
 
 ```bash
-poetry run python scripts/prepare_dataset.py   --input data/raw/application_train.csv   --output data/processed/train_features.parquet   --target TARGET   --id-column SK_ID_CURR
+poetry run python scripts/build_home_credit_dataset.py
 ```
 
 4. Compare candidate models:
