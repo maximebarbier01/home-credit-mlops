@@ -4,7 +4,9 @@ import argparse
 from dataclasses import asdict, dataclass, replace
 from functools import partial
 import json
+import logging
 from pathlib import Path
+import re
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -40,8 +42,11 @@ from home_credit_mlops.modeling.metrics import (
     evaluate_threshold,
     find_best_threshold,
 )
-from home_credit_mlops.reporting.excel import build_experiment_workbooks
+from home_credit_mlops.reporting.excel import build_experiment_workbooks, remove_files_by_suffix
 from home_credit_mlops.settings import Settings, load_settings
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 PIPELINE_STEPS = [
@@ -161,6 +166,12 @@ def _save_prediction_tables(
     )
 
 
+def _resolve_pre_dispatch(n_jobs: int) -> int | str:
+    if n_jobs == -1:
+        return "2*n_jobs"
+    return max(1, n_jobs)
+
+
 def _plot_holdout_diagnostics(
     output_dir: Path,
     model_name: str,
@@ -233,6 +244,157 @@ def _model_family_from_estimator_class(estimator_class: str) -> str:
     if "LGBM" in estimator_class or "Boost" in estimator_class:
         return "boosting_tree"
     return "other"
+
+
+def _slugify_campaign_name(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower())
+    slug = normalized.strip("_")
+    return slug or "benchmark"
+
+
+def _build_default_campaign_name(
+    model_names: list[str] | None,
+    sample_size: int | None,
+    cv_folds: int,
+) -> str:
+    if not model_names:
+        model_token = "all_models"
+    elif len(model_names) == 1:
+        model_token = model_names[0]
+    else:
+        model_token = f"{len(model_names)}_models"
+
+    sample_token = "full_dataset" if sample_size is None else f"{sample_size}_rows"
+    return _slugify_campaign_name(f"benchmark_{model_token}_{sample_token}_cv{cv_folds}")
+
+
+def _build_campaign_overview(
+    *,
+    campaign_name: str,
+    created_at: str,
+    dataset_label: str,
+    dataset_path: str,
+    target_column: str,
+    id_column: str,
+    drop_columns: list[str],
+    selected_model_names: list[str],
+    sample_size: int | None,
+    experiment_frame: pd.DataFrame,
+    train_rows: int,
+    holdout_rows: int,
+    cv_folds: int,
+    n_jobs: int,
+    fn_cost: float,
+    fp_cost: float,
+    enable_mlflow: bool,
+    root_run_id: str | None,
+    registered_model_name: str | None,
+    registered_model_version: str | None,
+    best_model_name: str,
+    output_dir: Path,
+    test_dataset_available: bool,
+) -> pd.DataFrame:
+    return pd.DataFrame([{
+        "campaign_name": campaign_name,
+        "campaign_slug": _slugify_campaign_name(campaign_name),
+        "created_at": created_at,
+        "dataset_label": dataset_label,
+        "dataset_path": dataset_path,
+        "output_dir": output_dir.as_posix(),
+        "target_column": target_column,
+        "id_column": id_column,
+        "drop_columns": json.dumps(drop_columns),
+        "candidate_models": ",".join(selected_model_names),
+        "candidate_model_count": len(selected_model_names),
+        "sample_size_requested": sample_size if sample_size is not None else "full_dataset",
+        "sampled_rows": int(len(experiment_frame)),
+        "sampled_columns": int(experiment_frame.shape[1]),
+        "train_rows": int(train_rows),
+        "holdout_rows": int(holdout_rows),
+        "target_rate": float(experiment_frame[target_column].mean()),
+        "cv_folds": int(cv_folds),
+        "n_jobs": int(n_jobs),
+        "fn_cost": float(fn_cost),
+        "fp_cost": float(fp_cost),
+        "threshold_policy": "oof_business_cost_minimization",
+        "mlflow_enabled": bool(enable_mlflow),
+        "mlflow_root_run_id": root_run_id or "",
+        "registered_model_name": registered_model_name or "",
+        "registered_model_version": registered_model_version or "",
+        "best_model": best_model_name,
+        "test_dataset_available": bool(test_dataset_available),
+    }])
+
+
+def _build_cv_summary(results_frame: pd.DataFrame, *, best_model_name: str) -> pd.DataFrame:
+    summary = results_frame.copy()
+    summary.insert(0, "selected_as_best", summary["model_name"] == best_model_name)
+    summary["model"] = summary["model_name"]
+    ordered_cols = [
+        "selected_as_best", "model", "threshold", "cv_business_cost", "cv_roc_auc",
+        "cv_average_precision", "cv_accuracy", "cv_balanced_accuracy", "oof_roc_auc",
+        "oof_average_precision", "oof_precision", "oof_recall", "oof_f1",
+        "oof_accuracy", "oof_balanced_accuracy", "best_params", "run_id",
+    ]
+    return summary[ordered_cols].copy()
+
+
+def _build_holdout_summary(results_frame: pd.DataFrame, *, best_model_name: str) -> pd.DataFrame:
+    summary = results_frame.copy()
+    summary.insert(0, "selected_as_best", summary["model_name"] == best_model_name)
+    summary["model"] = summary["model_name"]
+    ordered_cols = [
+        "selected_as_best", "model", "threshold", "holdout_business_cost",
+        "holdout_business_score", "holdout_roc_auc", "holdout_average_precision",
+        "holdout_accuracy", "holdout_balanced_accuracy", "holdout_precision",
+        "holdout_recall", "holdout_f1", "holdout_brier_score", "holdout_ks_statistic",
+        "true_negatives", "false_positives", "false_negatives", "true_positives",
+        "best_params", "run_id",
+    ]
+    return summary[ordered_cols].copy()
+
+
+def _build_decision_threshold_summary(results_frame: pd.DataFrame, *, best_model_name: str) -> pd.DataFrame:
+    summary = results_frame.copy()
+    summary.insert(0, "selected_as_best", summary["model_name"] == best_model_name)
+    summary["model"] = summary["model_name"]
+    summary["selection_basis"] = "out_of_fold_business_cost_minimization"
+    ordered_cols = [
+        "selected_as_best", "model", "selection_basis", "threshold",
+        "holdout_business_cost", "holdout_business_score", "holdout_precision",
+        "holdout_recall", "holdout_f1", "true_negatives", "false_positives",
+        "false_negatives", "true_positives", "run_id",
+    ]
+    return summary[ordered_cols].copy()
+
+
+def _build_mlflow_runs_summary(results_frame: pd.DataFrame, *, campaign_name: str, best_model_name: str, root_run_id: str | None) -> pd.DataFrame:
+    rows = [{
+        "scope": "campaign",
+        "campaign_name": campaign_name,
+        "model": "",
+        "run_id": root_run_id or "",
+        "selected_as_best": False,
+        "threshold": np.nan,
+        "holdout_business_cost": np.nan,
+        "holdout_roc_auc": np.nan,
+    }]
+    for row in results_frame.itertuples(index=False):
+        rows.append({
+            "scope": "model",
+            "campaign_name": campaign_name,
+            "model": row.model_name,
+            "run_id": row.run_id or "",
+            "selected_as_best": row.model_name == best_model_name,
+            "threshold": float(row.threshold),
+            "holdout_business_cost": float(row.holdout_business_cost),
+            "holdout_roc_auc": float(row.holdout_roc_auc),
+        })
+    return pd.DataFrame(rows)
+
+
+def _build_best_model_summary(performance_summary: pd.DataFrame, *, best_model_name: str) -> pd.DataFrame:
+    return performance_summary.loc[performance_summary["model"] == best_model_name].copy()
 
 
 def _build_model_performance_summary(
@@ -320,12 +482,14 @@ def _log_candidate_run(
     *,
     output_dir: Path,
     x_example: pd.DataFrame,
+    campaign_name: str,
 ) -> None:
     result = artifacts.result
     mlflow.set_tags(
         {
             "stage": "candidate_benchmark",
             "pipeline": "home_credit_build",
+            "campaign_name": campaign_name,
             "model_name": result.model_name,
         }
     )
@@ -366,26 +530,23 @@ def _log_candidate_run(
 
 
 def _log_experiment_artifacts(output_dir: Path) -> None:
-    root_files = [
-        output_dir / "benchmark_results.csv",
-        output_dir / "experiment_metadata.json",
-        output_dir / "decision_threshold.json",
-        output_dir / "summary.xlsx",
-    ]
-    for path in root_files:
-        if path.exists():
-            mlflow.log_artifact(path.as_posix(), artifact_path="experiment")
-
-    if (output_dir / "best_model_test_predictions.csv").exists():
-        mlflow.log_artifact(
-            (output_dir / "best_model_test_predictions.csv").as_posix(),
-            artifact_path="predictions",
-        )
+    supported_suffixes = {".csv", ".json", ".xlsx"}
+    for path in sorted(output_dir.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in supported_suffixes:
+            continue
+        artifact_path = "predictions" if path.name == "best_model_test_predictions.csv" else "experiment"
+        mlflow.log_artifact(path.as_posix(), artifact_path=artifact_path)
 
     for directory_name in ["cv_results", "diagnostics", "interpretability", "predictions"]:
         directory = output_dir / directory_name
         if directory.exists():
             mlflow.log_artifacts(directory.as_posix(), artifact_path=directory_name)
+
+
+def _cleanup_experiment_csv_files(output_dir: Path) -> None:
+    remove_files_by_suffix(output_dir)
+    for directory in sorted(path for path in output_dir.iterdir() if path.is_dir()):
+        remove_files_by_suffix(directory)
 
 
 def _log_final_model(
@@ -453,6 +614,7 @@ def _benchmark_single_model(
         refit="business_score",
         cv=cv,
         n_jobs=settings.training.n_jobs,
+        pre_dispatch=_resolve_pre_dispatch(settings.training.n_jobs),
         verbose=1,
         error_score="raise",
     )
@@ -560,6 +722,9 @@ def _run_benchmark_body(
     *,
     settings: Settings,
     destination: Path,
+    campaign_name: str,
+    dataset_label: str,
+    dataset_path: str,
     target_column: str,
     id_column: str,
     drop_columns: list[str],
@@ -598,26 +763,50 @@ def _run_benchmark_body(
 
     available_models = get_model_specs()
     selected_model_names = model_names or list(available_models.keys())
+    created_at = pd.Timestamp.now().isoformat()
+    campaign_slug = _slugify_campaign_name(campaign_name)
     results: list[BenchmarkRunResult] = []
     artifacts_by_model: dict[str, ModelBenchmarkArtifacts] = {}
+
+    if (
+        sample_size is None
+        and len(selected_model_names) > 1
+        and cv_folds >= 5
+        and len(experiment_frame) >= 100_000
+    ):
+        LOGGER.warning(
+            "Large benchmark requested: %s rows, %s models, cv=%s, n_jobs=%s. "
+            "This can destabilize WSL/VS Code. For development, prefer "
+            "--model lightgbm --sample-size 5000 --cv-folds 3 --n-jobs 1.",
+            len(experiment_frame),
+            len(selected_model_names),
+            cv_folds,
+            settings.training.n_jobs,
+        )
 
     if enable_mlflow:
         mlflow.set_tags(
             {
                 "stage": "benchmark",
                 "pipeline": "home_credit_build",
+                "campaign_name": campaign_name,
+                "campaign_slug": campaign_slug,
+                "dataset_label": dataset_label,
                 "target_column": target_column,
                 "decision_policy": "oof_business_cost_minimization",
             }
         )
         mlflow.log_params(
             {
+                "campaign_name": campaign_name,
+                "dataset_label": dataset_label,
                 "target_column": target_column,
                 "id_column": id_column,
                 "drop_columns": ",".join(drop_columns),
                 "candidate_models": ",".join(selected_model_names),
                 "sample_size": int(sample_size) if sample_size is not None else int(len(experiment_frame)),
                 "cv_folds": int(cv_folds),
+                "n_jobs": int(settings.training.n_jobs),
                 "test_size": float(settings.dataset.test_size),
                 "fn_cost": float(settings.business.fn_cost),
                 "fp_cost": float(settings.business.fp_cost),
@@ -651,6 +840,7 @@ def _run_benchmark_body(
                     artifacts,
                     output_dir=destination,
                     x_example=x_holdout,
+                    campaign_name=campaign_name,
                 )
         else:
             artifacts = _benchmark_single_model(
@@ -683,8 +873,24 @@ def _run_benchmark_body(
         available_models,
         best_model_name=best_model_name,
     )
+    cv_summary = _build_cv_summary(results_frame, best_model_name=best_model_name)
+    holdout_summary = _build_holdout_summary(results_frame, best_model_name=best_model_name)
+    threshold_summary = _build_decision_threshold_summary(results_frame, best_model_name=best_model_name)
+    best_model_summary = _build_best_model_summary(performance_summary, best_model_name=best_model_name)
+    root_run_id = mlflow.active_run().info.run_id if enable_mlflow and mlflow.active_run() else None
+    mlflow_runs = _build_mlflow_runs_summary(
+        results_frame,
+        campaign_name=campaign_name,
+        best_model_name=best_model_name,
+        root_run_id=root_run_id,
+    )
     results_frame.to_csv(destination / "benchmark_results.csv", index=False)
     performance_summary.to_csv(destination / "model_performance_summary.csv", index=False)
+    cv_summary.to_csv(destination / "cv_summary.csv", index=False)
+    holdout_summary.to_csv(destination / "holdout_summary.csv", index=False)
+    threshold_summary.to_csv(destination / "decision_threshold_summary.csv", index=False)
+    best_model_summary.to_csv(destination / "best_model_summary.csv", index=False)
+    mlflow_runs.to_csv(destination / "mlflow_runs.csv", index=False)
 
     best_artifacts = artifacts_by_model[best_model_name]
     best_result = best_artifacts.result
@@ -755,29 +961,67 @@ def _run_benchmark_body(
             register_model_name=register_model_name,
         )
 
+    campaign_overview = _build_campaign_overview(
+        campaign_name=campaign_name,
+        created_at=created_at,
+        dataset_label=dataset_label,
+        dataset_path=dataset_path,
+        target_column=target_column,
+        id_column=id_column,
+        drop_columns=drop_columns,
+        selected_model_names=selected_model_names,
+        sample_size=sample_size,
+        experiment_frame=experiment_frame,
+        train_rows=len(x_train),
+        holdout_rows=len(x_holdout),
+        cv_folds=cv_folds,
+        n_jobs=settings.training.n_jobs,
+        fn_cost=settings.business.fn_cost,
+        fp_cost=settings.business.fp_cost,
+        enable_mlflow=enable_mlflow,
+        root_run_id=root_run_id,
+        registered_model_name=register_model_name,
+        registered_model_version=registered_model_version,
+        best_model_name=best_model_name,
+        output_dir=destination,
+        test_dataset_available=test_dataframe is not None,
+    )
+    campaign_overview.to_csv(destination / "campaign_overview.csv", index=False)
+
     metadata = {
+        "campaign_name": campaign_name,
+        "campaign_slug": campaign_slug,
+        "created_at": created_at,
+        "dataset_label": dataset_label,
+        "dataset_path": dataset_path,
+        "output_dir": destination.as_posix(),
         "pipeline_steps": PIPELINE_STEPS,
+        "candidate_models": selected_model_names,
+        "sample_size_requested": sample_size,
         "sampled_rows": int(len(experiment_frame)),
         "sampled_columns": int(experiment_frame.shape[1]),
         "train_rows": int(len(x_train)),
         "holdout_rows": int(len(x_holdout)),
         "target_rate": float(experiment_frame[target_column].mean()),
         "cv_folds": int(cv_folds),
+        "n_jobs": int(settings.training.n_jobs),
         "mlflow_enabled": bool(enable_mlflow),
+        "mlflow_root_run_id": root_run_id,
         "registered_model_name": register_model_name,
         "registered_model_version": registered_model_version,
         "best_model": _jsonable(asdict(best_result)),
     }
-    (destination / "experiment_metadata.json").write_text(
+    (destination / "campaign_metadata.json").write_text(
         json.dumps(metadata, indent=2),
         encoding="utf-8",
     )
-    build_experiment_workbooks(destination, cleanup_csv=True)
+    build_experiment_workbooks(destination, cleanup_csv=False)
 
     if enable_mlflow:
-        mlflow.log_dict(metadata, "experiment_metadata.json")
+        mlflow.log_dict(metadata, "campaign_metadata.json")
         _log_experiment_artifacts(destination)
 
+    _cleanup_experiment_csv_files(destination)
     return results_frame
 
 
@@ -786,6 +1030,9 @@ def run_benchmark_experiment(
     *,
     settings: Settings,
     output_dir: str | Path,
+    campaign_name: str,
+    dataset_label: str,
+    dataset_path: str,
     target_column: str,
     id_column: str,
     drop_columns: list[str],
@@ -806,12 +1053,15 @@ def run_benchmark_experiment(
 
     if enable_mlflow:
         configure_mlflow(settings)
-        run_name = mlflow_run_name or f"benchmark-{pd.Timestamp.now().strftime('%Y%m%d-%H%M%S')}"
+        run_name = mlflow_run_name or campaign_name
         with mlflow.start_run(run_name=run_name):
             return _run_benchmark_body(
                 dataframe,
                 settings=settings,
                 destination=destination,
+                campaign_name=campaign_name,
+                dataset_label=dataset_label,
+                dataset_path=dataset_path,
                 target_column=target_column,
                 id_column=id_column,
                 drop_columns=drop_columns,
@@ -830,6 +1080,9 @@ def run_benchmark_experiment(
         dataframe,
         settings=settings,
         destination=destination,
+        campaign_name=campaign_name,
+        dataset_label=dataset_label,
+        dataset_path=dataset_path,
         target_column=target_column,
         id_column=id_column,
         drop_columns=drop_columns,
@@ -860,6 +1113,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Output directory for reports and exports.",
     )
+    parser.add_argument(
+        "--campaign-name",
+        default=None,
+        help="Optional human-readable campaign name used in reports and MLflow.",
+    )
     parser.add_argument("--target", default=None, help="Target column name.")
     parser.add_argument("--id-column", default=None, help="Identifier column name.")
     parser.add_argument(
@@ -885,6 +1143,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Override the number of cross-validation folds.",
+    )
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=None,
+        help="Override joblib parallel workers. Use 1 for WSL-safe runs.",
     )
     parser.add_argument(
         "--shap-sample-size",
@@ -927,6 +1191,22 @@ def main() -> None:
     args = parse_args()
     settings = load_settings(args.config)
 
+    if args.n_jobs == 0 or (args.n_jobs is not None and args.n_jobs < -1):
+        raise ValueError("`--n-jobs` must be -1 or a positive integer.")
+    if args.n_jobs is not None:
+        settings = replace(
+            settings,
+            training=replace(settings.training, n_jobs=args.n_jobs),
+        )
+
+    effective_model_names = args.model or None
+    effective_cv_folds = args.cv_folds or settings.training.cv_folds
+    campaign_name = args.campaign_name or _build_default_campaign_name(
+        effective_model_names,
+        args.sample_size,
+        effective_cv_folds,
+    )
+
     data_path = Path(args.data) if args.data else settings.dataset.default_train_path
     test_data_path = (
         Path(args.test_data)
@@ -942,7 +1222,12 @@ def main() -> None:
     else:
         date_prefix = pd.Timestamp.now().strftime("%Y%m%d")
         timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = settings.paths.reports_dir / f"{date_prefix}_home_credit_experiments" / timestamp
+        campaign_slug = _slugify_campaign_name(campaign_name)
+        output_dir = (
+            settings.paths.reports_dir
+            / f"{date_prefix}_home_credit_experiments"
+            / f"{timestamp}_{campaign_slug}"
+        )
 
     dataframe = read_table(data_path)
     test_dataframe = read_table(test_data_path) if test_data_path.exists() else None
@@ -951,10 +1236,13 @@ def main() -> None:
         dataframe,
         settings=settings,
         output_dir=output_dir,
+        campaign_name=campaign_name,
+        dataset_label=data_path.name,
+        dataset_path=data_path.as_posix(),
         target_column=target_column,
         id_column=id_column,
         drop_columns=drop_columns,
-        model_names=args.model or None,
+        model_names=effective_model_names,
         test_dataframe=test_dataframe,
         sample_size=args.sample_size,
         cv_folds=args.cv_folds,
@@ -967,6 +1255,7 @@ def main() -> None:
     )
 
     print(results.to_string(index=False))
+    print(f"Campaign: {campaign_name}")
     print(f"Artifacts saved to: {output_dir}")
 
 

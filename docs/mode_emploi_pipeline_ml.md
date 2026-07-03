@@ -53,8 +53,13 @@ Script : [scripts/run_home_credit_experiment.py](/home/maxime/projects/home-cred
 Commande type :
 
 ```bash
-poetry run python scripts/run_home_credit_experiment.py --model lightgbm --sample-size 5000 --cv-folds 3
+poetry run python scripts/run_home_credit_experiment.py --campaign-name dev_lightgbm_5k_cv3 --model lightgbm --sample-size 5000 --cv-folds 3 --n-jobs 1
 ```
+
+Conseil pratique sous WSL / VS Code :
+- pour le developpement, privilegier un seul modele ;
+- utiliser un `sample-size` ;
+- garder `--n-jobs 1` pour eviter les crashs du terminal ou du serveur WSL.
 
 Ce script lance [src/home_credit_mlops/modeling/benchmark.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/modeling/benchmark.py).
 
@@ -162,6 +167,7 @@ Elle fait :
 - creation du pipeline preprocessing + modele
 - `GridSearchCV`
 - cross-validation stratifiee
+- warning explicite si on demande un benchmark complet potentiellement trop lourd pour WSL / VS Code
 - comparaison de plusieurs modeles
 - calcul des probabilites OOF
 - recherche du meilleur seuil metier
@@ -310,7 +316,7 @@ Configuration centrale du projet.
 ### Cas 2. Tu modifies un modele ou ses hyperparametres
 1. Tu modifies `modeling/candidates.py`
 2. Tu relances `run_home_credit_experiment.py`
-3. Tu regardes `summary.xlsx`, les classeurs de sous-dossiers et MLflow
+3. Tu regardes d abord `summary.xlsx` pour comparer toute la campagne, puis les classeurs de sous-dossiers et MLflow pour creuser
 
 ### Cas 3. Tu veux aller vite
 Utilise par exemple :
@@ -342,11 +348,11 @@ poetry run python scripts/run_home_credit_experiment.py --model lightgbm --cv-fo
 - images de diagnostic de missing values, target et associations avec la target
 
 ### Experiment ML
-Dans `reports/YYYYMMDD_home_credit_experiments/<timestamp>/` :
-- `experiment_metadata.json`
+Dans `reports/YYYYMMDD_home_credit_experiments/<timestamp>_<campaign_name>/` :
+- `campaign_metadata.json`
 - `decision_threshold.json`
 - `summary.xlsx`
-- un onglet `model_performance_summary` dans `summary.xlsx` pour comparer les modeles testes dans une logique commune
+- des onglets de synthese comme `campaign_overview`, `model_performance_summary`, `cv_summary`, `holdout_summary`, `decision_threshold_summary` et `mlflow_runs`
 - dossiers `diagnostics/`, `interpretability/`, `predictions/`, `cv_results/`
 - un classeur Excel dans chacun de ces dossiers
 - fichiers parquet pour les predictions et les sorties conservees
