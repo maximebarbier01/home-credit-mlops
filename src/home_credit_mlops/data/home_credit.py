@@ -741,6 +741,12 @@ def build_home_credit_dataset(
     plot_missingness(train_frame, report_dir, "train_features")
 
     metadata = {
+        "pipeline_steps": [
+            "data_preparation",
+            "variable_cleaning",
+            "feature_engineering",
+            "dataset_export",
+        ],
         "train_rows": int(len(train_frame)),
         "test_rows": int(len(test_frame)),
         "train_columns": int(train_frame.shape[1]),
