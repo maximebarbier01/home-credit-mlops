@@ -21,6 +21,7 @@ from home_credit_mlops.logging_utils import configure_logging
 from home_credit_mlops.modeling.candidates import ModelSpec, get_model_specs
 from home_credit_mlops.modeling.interpretability import export_feature_importance, export_shap_analysis
 from home_credit_mlops.modeling.metrics import business_scorer, evaluate_threshold, find_best_threshold
+from home_credit_mlops.reporting.excel import build_experiment_workbooks
 from home_credit_mlops.settings import Settings, load_settings
 
 
@@ -427,6 +428,7 @@ def run_benchmark_experiment(
         json.dumps(metadata, indent=2),
         encoding="utf-8",
     )
+    build_experiment_workbooks(destination)
 
     return results_frame
 
