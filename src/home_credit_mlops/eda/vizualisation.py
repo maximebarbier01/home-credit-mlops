@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from scipy.stats import chi2_contingency, pointbiserialr
 
 
@@ -111,8 +113,6 @@ def compute_feature_target_associations(
     )
 
 
-from pathlib import Path
-import matplotlib.pyplot as plt
 
 
 def plot_feature_target_associations(
@@ -190,7 +190,7 @@ def plot_feature_target_associations(
 
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
 
-    plt.show()
+    plt.close(fig)
 
 
 def compute_feature_target_signed_associations(
@@ -378,4 +378,4 @@ def plot_signed_feature_target_associations(
 
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
 
-    plt.show()
+    plt.close(fig)
