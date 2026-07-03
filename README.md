@@ -4,8 +4,8 @@ Base project for the OpenClassrooms "Initiez-vous au MLOps" credit scoring exerc
 
 ## Main entrypoints
 
-- `scripts/build_home_credit_dataset.py`: step-1 dataset build from the raw Home Credit tables
-- `scripts/run_home_credit_experiment.py`: unified ML build with EDA, preprocessing, benchmark, threshold optimization, SHAP, Excel exports, and MLflow tracking
+- `scripts/build_home_credit_dataset.py`: data preparation, feature engineering, and final dataset EDA from the raw Home Credit tables
+- `scripts/run_home_credit_experiment.py`: model training, benchmark, threshold optimization, SHAP, Excel exports, and MLflow tracking
 - `scripts/mlflow_ui.py`: start the MLflow UI during the MLOps phase
 - detailed French guide: `docs/mode_emploi_pipeline_ml.md`
 
@@ -34,10 +34,12 @@ home-credit-mlops/
 The project now follows one main ML path from end to end:
 
 1. `data/home_credit.py`
-   prepares, cleans, joins, and enriches the raw Home Credit tables.
-2. `features/preprocessing.py`
+   prepares, cleans, joins, enriches, and documents the final modeling dataset.
+2. `eda/diagnostics.py`
+   produces the final dataset EDA and data-quality reports during the data-preparation step.
+3. `features/preprocessing.py`
    defines the preprocessing used by the models.
-3. `modeling/benchmark.py`
+4. `modeling/benchmark.py`
    trains and compares candidate models with cross-validation, evaluates them,
    optimizes the business decision threshold, exports diagnostics, and optionally logs everything in MLflow.
 4. `modeling/interpretability.py`
@@ -68,7 +70,7 @@ poetry install
 
 1. Put the Kaggle files in `data/raw/`
 
-2. Build the cleaned and aggregated feature dataset:
+2. Build the cleaned, feature-engineered dataset and the full data-preparation EDA package:
 
 ```bash
 poetry run python scripts/build_home_credit_dataset.py
@@ -94,15 +96,16 @@ poetry run python scripts/run_home_credit_experiment.py --skip-mlflow --sample-s
 
 ## What the unified experiment exports
 
-Each run under `reports/home_credit_experiments/<timestamp>/` includes:
+Each run under `reports/YYYYMMDD_home_credit_experiments/<timestamp>/` includes:
 
-- benchmark tables and metadata
-- OOF and holdout predictions
+- a root `summary.xlsx` workbook with a `model_performance_summary` sheet for cross-model comparison
+- per-folder Excel workbooks for `interpretability`, `diagnostics`, `predictions`, and `cv_results`
+- OOF and holdout prediction parquet files
 - ROC, PR, and confusion-matrix diagnostics
 - grouped feature importance
 - SHAP global and local explanations
 - decision-threshold metadata
-- Excel workbooks for `eda`, `interpretability`, `diagnostics`, `predictions`, `cv_results`, and the root summary
+- packaged reports where CSV exports are converted to Excel tabs and then removed
 
 ## What this scaffold already covers
 

@@ -27,7 +27,6 @@ from sklearn.model_selection import (
 from sklearn.pipeline import Pipeline
 
 from home_credit_mlops.data.io import read_table
-from home_credit_mlops.eda.diagnostics import generate_home_credit_eda_artifacts
 from home_credit_mlops.features.preprocessing import build_preprocessor, split_features_target
 from home_credit_mlops.logging_utils import configure_logging
 from home_credit_mlops.mlflow_utils import configure_mlflow, register_logged_model
@@ -46,9 +45,6 @@ from home_credit_mlops.settings import Settings, load_settings
 
 
 PIPELINE_STEPS = [
-    "data_preparation",
-    "variable_cleaning",
-    "feature_engineering",
     "model_preprocessing",
     "cross_validated_training",
     "performance_evaluation",
@@ -70,6 +66,13 @@ class BenchmarkRunResult:
     cv_average_precision: float
     cv_accuracy: float
     cv_balanced_accuracy: float
+    oof_roc_auc: float
+    oof_average_precision: float
+    oof_precision: float
+    oof_recall: float
+    oof_f1: float
+    oof_accuracy: float
+    oof_balanced_accuracy: float
     holdout_business_cost: float
     holdout_business_score: float
     holdout_roc_auc: float
@@ -209,6 +212,109 @@ def _metrics_from_result(result: BenchmarkRunResult) -> dict[str, float]:
     return metrics
 
 
+def _f_beta_from_precision_recall(
+    precision: float,
+    recall: float,
+    *,
+    beta: float = 2.0,
+) -> float:
+    beta_sq = beta**2
+    denominator = beta_sq * precision + recall
+    if denominator == 0:
+        return 0.0
+    return float((1 + beta_sq) * precision * recall / denominator)
+
+
+def _model_family_from_estimator_class(estimator_class: str) -> str:
+    if "LogisticRegression" in estimator_class:
+        return "linear"
+    if "Forest" in estimator_class or "Trees" in estimator_class:
+        return "bagging_tree"
+    if "LGBM" in estimator_class or "Boost" in estimator_class:
+        return "boosting_tree"
+    return "other"
+
+
+def _build_model_performance_summary(
+    results_frame: pd.DataFrame,
+    available_models: dict[str, ModelSpec],
+    *,
+    best_model_name: str,
+) -> pd.DataFrame:
+    summary = results_frame.copy()
+    estimator_class_lookup = {
+        model_name: available_models[model_name].estimator_factory().__class__.__name__
+        for model_name in summary["model_name"].tolist()
+        if model_name in available_models
+    }
+    summary["model"] = summary["model_name"]
+    summary["estimator_class"] = summary["model"].map(estimator_class_lookup)
+    summary["family"] = summary["estimator_class"].map(_model_family_from_estimator_class)
+    summary["strategie_seuil"] = "cv_business_cost_optimized"
+    summary["selected_as_best"] = summary["model"] == best_model_name
+    summary["precision_1"] = summary["holdout_precision"]
+    summary["recall_1"] = summary["holdout_recall"]
+    summary["f1_1"] = summary["holdout_f1"]
+    summary["f2_1"] = summary.apply(
+        lambda row: _f_beta_from_precision_recall(
+            float(row["holdout_precision"]),
+            float(row["holdout_recall"]),
+            beta=2.0,
+        ),
+        axis=1,
+    )
+    summary["prc_auc"] = summary["holdout_average_precision"]
+    summary["train_precision_1"] = summary["oof_precision"]
+    summary["train_recall_1"] = summary["oof_recall"]
+    summary["train_f1_1"] = summary["oof_f1"]
+    summary["train_f2_1"] = summary.apply(
+        lambda row: _f_beta_from_precision_recall(
+            float(row["oof_precision"]),
+            float(row["oof_recall"]),
+            beta=2.0,
+        ),
+        axis=1,
+    )
+    summary["train_prc_auc"] = summary["oof_average_precision"]
+    summary["tn"] = summary["true_negatives"]
+    summary["fp"] = summary["false_positives"]
+    summary["fn"] = summary["false_negatives"]
+    summary["tp"] = summary["true_positives"]
+    summary.insert(0, "rank", np.arange(1, len(summary) + 1))
+
+    ordered_cols = [
+        "rank",
+        "selected_as_best",
+        "model",
+        "family",
+        "estimator_class",
+        "strategie_seuil",
+        "threshold",
+        "precision_1",
+        "recall_1",
+        "f1_1",
+        "f2_1",
+        "prc_auc",
+        "train_precision_1",
+        "train_recall_1",
+        "train_f1_1",
+        "train_f2_1",
+        "train_prc_auc",
+        "holdout_business_cost",
+        "holdout_business_score",
+        "cv_business_cost",
+        "cv_roc_auc",
+        "cv_average_precision",
+        "tn",
+        "fp",
+        "fn",
+        "tp",
+        "best_params",
+        "run_id",
+    ]
+    return summary[[column for column in ordered_cols if column in summary.columns]].copy()
+
+
 def _log_candidate_run(
     artifacts: ModelBenchmarkArtifacts,
     *,
@@ -276,7 +382,7 @@ def _log_experiment_artifacts(output_dir: Path) -> None:
             artifact_path="predictions",
         )
 
-    for directory_name in ["eda", "cv_results", "diagnostics", "interpretability", "predictions"]:
+    for directory_name in ["cv_results", "diagnostics", "interpretability", "predictions"]:
         directory = output_dir / directory_name
         if directory.exists():
             mlflow.log_artifacts(directory.as_posix(), artifact_path=directory_name)
@@ -391,6 +497,13 @@ def _benchmark_single_model(
         cv_balanced_accuracy=float(
             search.cv_results_["mean_test_balanced_accuracy"][search.best_index_]
         ),
+        oof_roc_auc=threshold_result.roc_auc,
+        oof_average_precision=threshold_result.average_precision,
+        oof_precision=threshold_result.precision,
+        oof_recall=threshold_result.recall,
+        oof_f1=threshold_result.f1,
+        oof_accuracy=threshold_result.accuracy,
+        oof_balanced_accuracy=threshold_result.balanced_accuracy,
         holdout_business_cost=holdout_result.business_cost,
         holdout_business_score=holdout_result.business_score,
         holdout_roc_auc=holdout_result.roc_auc,
@@ -454,11 +567,9 @@ def _run_benchmark_body(
     test_dataframe: pd.DataFrame | None,
     sample_size: int | None,
     cv_folds: int,
-    association_sample_size: int,
     shap_sample_size: int,
     local_explanations: int,
     top_features: int,
-    run_eda: bool,
     enable_mlflow: bool,
     register_model_name: str | None,
 ) -> pd.DataFrame:
@@ -468,15 +579,6 @@ def _run_benchmark_body(
         target_column=target_column,
         random_state=settings.dataset.random_state,
     )
-    if run_eda:
-        generate_home_credit_eda_artifacts(
-            experiment_frame,
-            destination / "eda",
-            target_column=target_column,
-            association_sample_size=association_sample_size,
-            top_associations=top_features,
-            random_state=settings.dataset.random_state,
-        )
 
     features, target = split_features_target(
         experiment_frame,
@@ -519,11 +621,9 @@ def _run_benchmark_body(
                 "test_size": float(settings.dataset.test_size),
                 "fn_cost": float(settings.business.fn_cost),
                 "fp_cost": float(settings.business.fp_cost),
-                "association_sample_size": int(association_sample_size),
                 "shap_sample_size": int(shap_sample_size),
                 "local_explanations": int(local_explanations),
                 "top_features": int(top_features),
-                "run_eda": bool(run_eda),
             }
         )
         mlflow.log_dict({"pipeline_steps": PIPELINE_STEPS}, "pipeline_overview.json")
@@ -577,9 +677,15 @@ def _run_benchmark_body(
         ["holdout_business_cost", "holdout_average_precision", "holdout_roc_auc"],
         ascending=[True, False, False],
     ).reset_index(drop=True)
-    results_frame.to_csv(destination / "benchmark_results.csv", index=False)
-
     best_model_name = results_frame.iloc[0]["model_name"]
+    performance_summary = _build_model_performance_summary(
+        results_frame,
+        available_models,
+        best_model_name=best_model_name,
+    )
+    results_frame.to_csv(destination / "benchmark_results.csv", index=False)
+    performance_summary.to_csv(destination / "model_performance_summary.csv", index=False)
+
     best_artifacts = artifacts_by_model[best_model_name]
     best_result = best_artifacts.result
     best_model_spec = available_models[best_model_name]
@@ -666,7 +772,7 @@ def _run_benchmark_body(
         json.dumps(metadata, indent=2),
         encoding="utf-8",
     )
-    build_experiment_workbooks(destination)
+    build_experiment_workbooks(destination, cleanup_csv=True)
 
     if enable_mlflow:
         mlflow.log_dict(metadata, "experiment_metadata.json")
@@ -687,11 +793,9 @@ def run_benchmark_experiment(
     test_dataframe: pd.DataFrame | None = None,
     sample_size: int | None = None,
     cv_folds: int | None = None,
-    association_sample_size: int = 100_000,
     shap_sample_size: int = 1_500,
     local_explanations: int = 3,
     top_features: int = 20,
-    run_eda: bool = True,
     enable_mlflow: bool = True,
     mlflow_run_name: str | None = None,
     register_model_name: str | None = None,
@@ -715,11 +819,9 @@ def run_benchmark_experiment(
                 test_dataframe=test_dataframe,
                 sample_size=sample_size,
                 cv_folds=effective_cv_folds,
-                association_sample_size=association_sample_size,
                 shap_sample_size=shap_sample_size,
                 local_explanations=local_explanations,
                 top_features=top_features,
-                run_eda=run_eda,
                 enable_mlflow=True,
                 register_model_name=register_model_name,
             )
@@ -735,11 +837,9 @@ def run_benchmark_experiment(
         test_dataframe=test_dataframe,
         sample_size=sample_size,
         cv_folds=effective_cv_folds,
-        association_sample_size=association_sample_size,
         shap_sample_size=shap_sample_size,
         local_explanations=local_explanations,
         top_features=top_features,
-        run_eda=run_eda,
         enable_mlflow=False,
         register_model_name=register_model_name,
     )
@@ -748,8 +848,8 @@ def run_benchmark_experiment(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the consolidated Home Credit build: EDA, model benchmark, "
-            "threshold optimization, SHAP, Excel exports, and optional MLflow."
+            "Run the Home Credit model experiment: training, model comparison, "
+            "threshold optimization, interpretability exports, and optional MLflow."
         )
     )
     parser.add_argument("--config", default="configs/default.toml")
@@ -787,12 +887,6 @@ def parse_args() -> argparse.Namespace:
         help="Override the number of cross-validation folds.",
     )
     parser.add_argument(
-        "--association-sample-size",
-        type=int,
-        default=100_000,
-        help="Maximum number of rows used for association plots.",
-    )
-    parser.add_argument(
         "--shap-sample-size",
         type=int,
         default=1_500,
@@ -809,11 +903,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=20,
         help="Maximum number of features displayed in plots and exports.",
-    )
-    parser.add_argument(
-        "--skip-eda",
-        action="store_true",
-        help="Skip EDA artifact generation.",
     )
     parser.add_argument(
         "--skip-mlflow",
@@ -851,8 +940,9 @@ def main() -> None:
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
+        date_prefix = pd.Timestamp.now().strftime("%Y%m%d")
         timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = settings.paths.reports_dir / "home_credit_experiments" / timestamp
+        output_dir = settings.paths.reports_dir / f"{date_prefix}_home_credit_experiments" / timestamp
 
     dataframe = read_table(data_path)
     test_dataframe = read_table(test_data_path) if test_data_path.exists() else None
@@ -868,11 +958,9 @@ def main() -> None:
         test_dataframe=test_dataframe,
         sample_size=args.sample_size,
         cv_folds=args.cv_folds,
-        association_sample_size=args.association_sample_size,
         shap_sample_size=args.shap_sample_size,
         local_explanations=args.local_explanations,
         top_features=args.top_features,
-        run_eda=not args.skip_eda,
         enable_mlflow=not args.skip_mlflow,
         mlflow_run_name=args.mlflow_run_name,
         register_model_name=args.register_model_name,

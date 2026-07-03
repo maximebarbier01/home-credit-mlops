@@ -9,6 +9,7 @@ import pandas as pd
 
 TABLE_SUFFIXES = {".csv", ".parquet", ".json"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
+CSV_SUFFIXES = {".csv"}
 MAX_SHEET_NAME_LENGTH = 31
 MAX_IMAGE_WIDTH = 1200
 MAX_IMAGE_HEIGHT = 800
@@ -47,7 +48,7 @@ def _read_supported_table(path: Path) -> pd.DataFrame:
 
 
 def _sanitize_sheet_name(name: str, existing_names: set[str]) -> str:
-    invalid_characters = set('[]:*?/\\')
+    invalid_characters = set("[]:*?/\\")
     cleaned = "".join("_" if character in invalid_characters else character for character in name)
     cleaned = cleaned.strip().strip("'") or "sheet"
     cleaned = cleaned[:MAX_SHEET_NAME_LENGTH]
@@ -72,6 +73,23 @@ def _resize_image(image: ExcelImage) -> None:
     ratio = min(MAX_IMAGE_WIDTH / width, MAX_IMAGE_HEIGHT / height, 1.0)
     image.width = int(width * ratio)
     image.height = int(height * ratio)
+
+
+def remove_files_by_suffix(
+    source_dir: str | Path,
+    suffixes: set[str] | None = None,
+) -> list[Path]:
+    source = Path(source_dir)
+    if not source.exists():
+        return []
+
+    normalized_suffixes = {suffix.lower() for suffix in (suffixes or CSV_SUFFIXES)}
+    removed_paths: list[Path] = []
+    for path in sorted(source.iterdir()):
+        if path.is_file() and path.suffix.lower() in normalized_suffixes:
+            path.unlink()
+            removed_paths.append(path)
+    return removed_paths
 
 
 def build_workbook_from_directory(
@@ -136,20 +154,30 @@ def build_workbook_from_directory(
     return destination
 
 
-def build_experiment_workbooks(output_dir: str | Path) -> list[Path]:
+def build_experiment_workbooks(
+    output_dir: str | Path,
+    *,
+    cleanup_csv: bool = False,
+) -> list[Path]:
     root = Path(output_dir)
     workbooks: list[Path] = []
+    directories = sorted(path for path in root.iterdir() if path.is_dir()) if root.exists() else []
 
     root_workbook = build_workbook_from_directory(root, root / "summary.xlsx")
     if root_workbook is not None:
         workbooks.append(root_workbook)
 
-    for directory in sorted(path for path in root.iterdir() if path.is_dir()):
+    for directory in directories:
         workbook = build_workbook_from_directory(
             directory,
             directory / f"{directory.name}.xlsx",
         )
         if workbook is not None:
             workbooks.append(workbook)
+
+    if cleanup_csv:
+        remove_files_by_suffix(root, CSV_SUFFIXES)
+        for directory in directories:
+            remove_files_by_suffix(directory, CSV_SUFFIXES)
 
     return workbooks
