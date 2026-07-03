@@ -7,6 +7,7 @@ Base project for the OpenClassrooms "Initiez-vous au MLOps" credit scoring exerc
 - `scripts/build_home_credit_dataset.py`: step-1 dataset build from the raw Home Credit tables
 - `scripts/run_home_credit_experiment.py`: unified ML build with EDA, preprocessing, benchmark, threshold optimization, SHAP, Excel exports, and MLflow tracking
 - `scripts/mlflow_ui.py`: start the MLflow UI during the MLOps phase
+- detailed French guide: `docs/mode_emploi_pipeline_ml.md`
 
 ## Project layout
 
@@ -17,6 +18,7 @@ home-credit-mlops/
 |   |-- raw/
 |   |-- interim/
 |   `-- processed/
+|-- docs/
 |-- scripts/
 |-- src/home_credit_mlops/
 |   |-- data/
