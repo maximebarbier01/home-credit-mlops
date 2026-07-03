@@ -70,6 +70,13 @@ class BenchmarkRunResult:
     cv_average_precision: float
     cv_accuracy: float
     cv_balanced_accuracy: float
+    oof_roc_auc: float
+    oof_average_precision: float
+    oof_precision: float
+    oof_recall: float
+    oof_f1: float
+    oof_accuracy: float
+    oof_balanced_accuracy: float
     holdout_business_cost: float
     holdout_business_score: float
     holdout_roc_auc: float
@@ -207,6 +214,109 @@ def _metrics_from_result(result: BenchmarkRunResult) -> dict[str, float]:
         if isinstance(value, (int, float, np.integer, np.floating)):
             metrics[key] = float(value)
     return metrics
+
+
+def _f_beta_from_precision_recall(
+    precision: float,
+    recall: float,
+    *,
+    beta: float = 2.0,
+) -> float:
+    beta_sq = beta**2
+    denominator = beta_sq * precision + recall
+    if denominator == 0:
+        return 0.0
+    return float((1 + beta_sq) * precision * recall / denominator)
+
+
+def _model_family_from_estimator_class(estimator_class: str) -> str:
+    if "LogisticRegression" in estimator_class:
+        return "linear"
+    if "Forest" in estimator_class or "Trees" in estimator_class:
+        return "bagging_tree"
+    if "LGBM" in estimator_class or "Boost" in estimator_class:
+        return "boosting_tree"
+    return "other"
+
+
+def _build_model_performance_summary(
+    results_frame: pd.DataFrame,
+    available_models: dict[str, ModelSpec],
+    *,
+    best_model_name: str,
+) -> pd.DataFrame:
+    summary = results_frame.copy()
+    estimator_class_lookup = {
+        model_name: available_models[model_name].estimator_factory().__class__.__name__
+        for model_name in summary["model_name"].tolist()
+        if model_name in available_models
+    }
+    summary["model"] = summary["model_name"]
+    summary["estimator_class"] = summary["model"].map(estimator_class_lookup)
+    summary["family"] = summary["estimator_class"].map(_model_family_from_estimator_class)
+    summary["strategie_seuil"] = "cv_business_cost_optimized"
+    summary["selected_as_best"] = summary["model"] == best_model_name
+    summary["precision_1"] = summary["holdout_precision"]
+    summary["recall_1"] = summary["holdout_recall"]
+    summary["f1_1"] = summary["holdout_f1"]
+    summary["f2_1"] = summary.apply(
+        lambda row: _f_beta_from_precision_recall(
+            float(row["holdout_precision"]),
+            float(row["holdout_recall"]),
+            beta=2.0,
+        ),
+        axis=1,
+    )
+    summary["prc_auc"] = summary["holdout_average_precision"]
+    summary["train_precision_1"] = summary["oof_precision"]
+    summary["train_recall_1"] = summary["oof_recall"]
+    summary["train_f1_1"] = summary["oof_f1"]
+    summary["train_f2_1"] = summary.apply(
+        lambda row: _f_beta_from_precision_recall(
+            float(row["oof_precision"]),
+            float(row["oof_recall"]),
+            beta=2.0,
+        ),
+        axis=1,
+    )
+    summary["train_prc_auc"] = summary["oof_average_precision"]
+    summary["tn"] = summary["true_negatives"]
+    summary["fp"] = summary["false_positives"]
+    summary["fn"] = summary["false_negatives"]
+    summary["tp"] = summary["true_positives"]
+    summary.insert(0, "rank", np.arange(1, len(summary) + 1))
+
+    ordered_cols = [
+        "rank",
+        "selected_as_best",
+        "model",
+        "family",
+        "estimator_class",
+        "strategie_seuil",
+        "threshold",
+        "precision_1",
+        "recall_1",
+        "f1_1",
+        "f2_1",
+        "prc_auc",
+        "train_precision_1",
+        "train_recall_1",
+        "train_f1_1",
+        "train_f2_1",
+        "train_prc_auc",
+        "holdout_business_cost",
+        "holdout_business_score",
+        "cv_business_cost",
+        "cv_roc_auc",
+        "cv_average_precision",
+        "tn",
+        "fp",
+        "fn",
+        "tp",
+        "best_params",
+        "run_id",
+    ]
+    return summary[[column for column in ordered_cols if column in summary.columns]].copy()
 
 
 def _log_candidate_run(
@@ -391,6 +501,13 @@ def _benchmark_single_model(
         cv_balanced_accuracy=float(
             search.cv_results_["mean_test_balanced_accuracy"][search.best_index_]
         ),
+        oof_roc_auc=threshold_result.roc_auc,
+        oof_average_precision=threshold_result.average_precision,
+        oof_precision=threshold_result.precision,
+        oof_recall=threshold_result.recall,
+        oof_f1=threshold_result.f1,
+        oof_accuracy=threshold_result.accuracy,
+        oof_balanced_accuracy=threshold_result.balanced_accuracy,
         holdout_business_cost=holdout_result.business_cost,
         holdout_business_score=holdout_result.business_score,
         holdout_roc_auc=holdout_result.roc_auc,
@@ -577,9 +694,15 @@ def _run_benchmark_body(
         ["holdout_business_cost", "holdout_average_precision", "holdout_roc_auc"],
         ascending=[True, False, False],
     ).reset_index(drop=True)
-    results_frame.to_csv(destination / "benchmark_results.csv", index=False)
-
     best_model_name = results_frame.iloc[0]["model_name"]
+    performance_summary = _build_model_performance_summary(
+        results_frame,
+        available_models,
+        best_model_name=best_model_name,
+    )
+    results_frame.to_csv(destination / "benchmark_results.csv", index=False)
+    performance_summary.to_csv(destination / "model_performance_summary.csv", index=False)
+
     best_artifacts = artifacts_by_model[best_model_name]
     best_result = best_artifacts.result
     best_model_spec = available_models[best_model_name]

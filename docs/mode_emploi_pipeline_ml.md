@@ -345,6 +345,7 @@ Dans `reports/YYYYMMDD_home_credit_experiments/<timestamp>/` :
 - `experiment_metadata.json`
 - `decision_threshold.json`
 - `summary.xlsx`
+- un onglet `model_performance_summary` dans `summary.xlsx` pour comparer les modeles testes dans une logique commune
 - dossiers `eda/`, `diagnostics/`, `interpretability/`, `predictions/`, `cv_results/`
 - un classeur Excel dans chacun de ces dossiers
 - fichiers parquet pour les predictions et les sorties conservees

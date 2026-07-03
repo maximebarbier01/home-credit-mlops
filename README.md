@@ -96,7 +96,7 @@ poetry run python scripts/run_home_credit_experiment.py --skip-mlflow --sample-s
 
 Each run under `reports/YYYYMMDD_home_credit_experiments/<timestamp>/` includes:
 
-- a root `summary.xlsx` workbook
+- a root `summary.xlsx` workbook with a `model_performance_summary` sheet for cross-model comparison
 - per-folder Excel workbooks for `eda`, `interpretability`, `diagnostics`, `predictions`, and `cv_results`
 - OOF and holdout prediction parquet files
 - ROC, PR, and confusion-matrix diagnostics
