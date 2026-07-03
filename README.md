@@ -2,16 +2,15 @@
 
 Base project for the OpenClassrooms "Initiez-vous au MLOps" credit scoring exercise.
 
-This repository is organized around Python scripts instead of notebooks:
+## Main commands
 
-- `scripts/profile_home_credit_raw.py` for a raw-table overview and missing-value profiling
-- `scripts/build_home_credit_dataset.py` for the full step-1 cleaning, aggregation, and merge pipeline
-- `scripts/eda.py` for exploratory analysis on a single exported table
-- `scripts/prepare_dataset.py` for a generic first cleaned dataset export
-- `scripts/compare_models.py` for model comparison with MLflow tracking
-- `scripts/train_model.py` for single-model training
-- `scripts/mlflow_ui.py` to start the MLflow UI
-- `scripts/serve_model.py` to test MLflow model serving
+- `poetry run home-credit-build-dataset`: step-1 dataset build from the raw Home Credit tables
+- `poetry run home-credit-run-experiment`: consolidated experiment pipeline with EDA, model benchmark, threshold optimization, SHAP, and Excel exports
+- `poetry run home-credit-compare-models`: MLflow-oriented model comparison utility kept for the MLOps phase
+- `poetry run home-credit-train-model`: MLflow-oriented single-model training utility
+- `poetry run home-credit-profile-raw`: optional raw-table profiling helper
+- `poetry run home-credit-mlflow-ui`: start the MLflow UI
+- `poetry run home-credit-serve-model`: test MLflow model serving locally
 
 ## Project layout
 
@@ -22,21 +21,33 @@ home-credit-mlops/
 |   |-- raw/
 |   |-- interim/
 |   `-- processed/
-|-- scripts/
 |-- src/home_credit_mlops/
 |   |-- data/
 |   |-- eda/
 |   |-- features/
-|   `-- modeling/
+|   |-- modeling/
+|   `-- reporting/
 `-- tests/
 ```
+
+## Why the code stays in `src/`
+
+Keeping the full implementation in `src/home_credit_mlops/` is still the cleanest option.
+The CLI commands are only entrypoints.
+
+This gives you both:
+
+- simple terminal usage with `poetry run home-credit-...`
+- reusable, testable, importable code in the package
+
+So your intuition was right that we had too much dispersion, but the fix was to reduce wrappers, not to move all the real logic into a single script file.
 
 ## Important note about the environment
 
 Poetry is installed in WSL on this machine, not in Windows PowerShell.
 Run the project commands from WSL, or through `wsl bash -lc ...`.
 
-The project is configured for Python `>=3.11,<3.13`, which matches the current WSL Python 3.12 setup.
+The project is configured for Python `>=3.11,<3.13`, which matches the current WSL Python setup.
 
 ## Quick start
 
@@ -48,48 +59,49 @@ poetry install
 ## Suggested workflow
 
 1. Put the Kaggle files in `data/raw/`
-2. Profile the raw Home Credit tables:
+
+2. Build the cleaned and aggregated feature dataset:
 
 ```bash
-poetry run python scripts/profile_home_credit_raw.py
+poetry run home-credit-build-dataset
 ```
 
-3. Build the cleaned and aggregated feature dataset:
+3. Run the consolidated experiment pipeline:
 
 ```bash
-poetry run python scripts/build_home_credit_dataset.py
+poetry run home-credit-run-experiment --model lightgbm --sample-size 5000 --cv-folds 3
 ```
 
-4. Compare candidate models:
+4. Open the MLflow UI when you work on the dedicated MLOps tracking step:
 
 ```bash
-poetry run python scripts/compare_models.py   --data data/processed/train_features.parquet   --target TARGET   --id-column SK_ID_CURR   --register-model-name home-credit-scoring
+poetry run home-credit-mlflow-ui
 ```
 
-5. Open the MLflow UI:
+5. Serve a registered model locally:
 
 ```bash
-poetry run python scripts/mlflow_ui.py
+poetry run home-credit-serve-model --model-uri models:/home-credit-scoring/1
 ```
 
-6. Serve a registered model:
+## What the consolidated experiment exports
 
-```bash
-poetry run python scripts/serve_model.py --model-uri models:/home-credit-scoring/1
-```
+Each run under `reports/home_credit_experiments/<timestamp>/` includes:
+
+- benchmark tables and metadata
+- OOF and holdout predictions
+- ROC, PR, and confusion-matrix diagnostics
+- grouped feature importance
+- SHAP global and local explanations
+- Excel workbooks for `eda`, `interpretability`, `diagnostics`, `predictions`, `cv_results`, and the root summary
 
 ## What this scaffold already covers
 
-- script-first project structure
-- reusable `src/` package
+- reusable package structure
+- feature aggregation from the main Home Credit tables
 - cross-validation and hyperparameter search
 - business cost with heavier false-negative penalty
 - threshold optimization on out-of-fold probabilities
+- SHAP-based interpretability exports
+- Excel bundling of experiment artifacts
 - MLflow experiment tracking and local model registry support
-
-## What you will likely customize next
-
-- feature engineering based on all Home Credit source tables
-- richer candidate models such as LightGBM
-- more advanced imbalance handling
-- deployment packaging for pre-production
