@@ -1,33 +1,68 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import partial
 import json
 from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+import mlflow
+import mlflow.sklearn
+from mlflow.models import infer_signature
 import numpy as np
 import pandas as pd
-from sklearn.metrics import ConfusionMatrixDisplay, PrecisionRecallDisplay, RocCurveDisplay
-from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_val_predict, train_test_split
+from sklearn.metrics import (
+    ConfusionMatrixDisplay,
+    PrecisionRecallDisplay,
+    RocCurveDisplay,
+)
+from sklearn.model_selection import (
+    GridSearchCV,
+    StratifiedKFold,
+    cross_val_predict,
+    train_test_split,
+)
 from sklearn.pipeline import Pipeline
 
 from home_credit_mlops.data.io import read_table
 from home_credit_mlops.eda.diagnostics import generate_home_credit_eda_artifacts
 from home_credit_mlops.features.preprocessing import build_preprocessor, split_features_target
 from home_credit_mlops.logging_utils import configure_logging
+from home_credit_mlops.mlflow_utils import configure_mlflow, register_logged_model
 from home_credit_mlops.modeling.candidates import ModelSpec, get_model_specs
-from home_credit_mlops.modeling.interpretability import export_feature_importance, export_shap_analysis
-from home_credit_mlops.modeling.metrics import business_scorer, evaluate_threshold, find_best_threshold
+from home_credit_mlops.modeling.interpretability import (
+    export_feature_importance,
+    export_shap_analysis,
+)
+from home_credit_mlops.modeling.metrics import (
+    business_scorer,
+    evaluate_threshold,
+    find_best_threshold,
+)
 from home_credit_mlops.reporting.excel import build_experiment_workbooks
 from home_credit_mlops.settings import Settings, load_settings
+
+
+PIPELINE_STEPS = [
+    "data_preparation",
+    "variable_cleaning",
+    "feature_engineering",
+    "model_preprocessing",
+    "cross_validated_training",
+    "performance_evaluation",
+    "decision_threshold_optimization",
+    "final_model_refit",
+    "interpretability_export",
+    "report_packaging",
+]
 
 
 @dataclass(frozen=True)
 class BenchmarkRunResult:
     model_name: str
+    run_id: str | None
     best_params: dict[str, Any]
     threshold: float
     cv_business_cost: float
@@ -55,6 +90,7 @@ class BenchmarkRunResult:
 @dataclass
 class ModelBenchmarkArtifacts:
     result: BenchmarkRunResult
+    search: GridSearchCV
     best_estimator: Pipeline
     oof_predictions: pd.DataFrame
     holdout_predictions: pd.DataFrame
@@ -163,6 +199,127 @@ def _build_scoring(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _metrics_from_result(result: BenchmarkRunResult) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for key, value in asdict(result).items():
+        if key in {"model_name", "run_id", "best_params"} or value is None:
+            continue
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            metrics[key] = float(value)
+    return metrics
+
+
+def _log_candidate_run(
+    artifacts: ModelBenchmarkArtifacts,
+    *,
+    output_dir: Path,
+    x_example: pd.DataFrame,
+) -> None:
+    result = artifacts.result
+    mlflow.set_tags(
+        {
+            "stage": "candidate_benchmark",
+            "pipeline": "home_credit_build",
+            "model_name": result.model_name,
+        }
+    )
+    mlflow.log_param("model_name", result.model_name)
+    mlflow.log_params(
+        {
+            key: (value if isinstance(value, (str, int, float, bool)) else json.dumps(value))
+            for key, value in _jsonable(result.best_params).items()
+        }
+    )
+    mlflow.log_metrics(_metrics_from_result(result))
+    mlflow.log_dict(_jsonable(asdict(result)), "evaluation_summary.json")
+
+    cv_path = output_dir / "cv_results" / f"{result.model_name}_cv_results.csv"
+    if cv_path.exists():
+        mlflow.log_artifact(cv_path.as_posix(), artifact_path="cv_results")
+
+    prediction_dir = output_dir / "predictions"
+    oof_path = prediction_dir / f"{result.model_name}_oof_predictions.parquet"
+    holdout_path = prediction_dir / f"{result.model_name}_holdout_predictions.parquet"
+    if oof_path.exists():
+        mlflow.log_artifact(oof_path.as_posix(), artifact_path="predictions")
+    if holdout_path.exists():
+        mlflow.log_artifact(holdout_path.as_posix(), artifact_path="predictions")
+
+    example = x_example.head(min(5, len(x_example))).copy()
+    if example.empty:
+        return
+
+    signature = infer_signature(example, artifacts.best_estimator.predict_proba(example))
+    mlflow.sklearn.log_model(
+        sk_model=artifacts.best_estimator,
+        artifact_path="candidate_model",
+        serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
+        signature=signature,
+        input_example=example,
+    )
+
+
+def _log_experiment_artifacts(output_dir: Path) -> None:
+    root_files = [
+        output_dir / "benchmark_results.csv",
+        output_dir / "experiment_metadata.json",
+        output_dir / "decision_threshold.json",
+        output_dir / "summary.xlsx",
+    ]
+    for path in root_files:
+        if path.exists():
+            mlflow.log_artifact(path.as_posix(), artifact_path="experiment")
+
+    if (output_dir / "best_model_test_predictions.csv").exists():
+        mlflow.log_artifact(
+            (output_dir / "best_model_test_predictions.csv").as_posix(),
+            artifact_path="predictions",
+        )
+
+    for directory_name in ["eda", "cv_results", "diagnostics", "interpretability", "predictions"]:
+        directory = output_dir / directory_name
+        if directory.exists():
+            mlflow.log_artifacts(directory.as_posix(), artifact_path=directory_name)
+
+
+def _log_final_model(
+    pipeline: Pipeline,
+    *,
+    features: pd.DataFrame,
+    best_result: BenchmarkRunResult,
+    register_model_name: str | None,
+) -> str | None:
+    example = features.head(min(5, len(features))).copy()
+    if example.empty:
+        return None
+
+    signature = infer_signature(example, pipeline.predict_proba(example))
+    mlflow.sklearn.log_model(
+        sk_model=pipeline,
+        artifact_path="final_model",
+        serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
+        signature=signature,
+        input_example=example,
+    )
+    mlflow.log_dict(
+        {
+            "model_name": best_result.model_name,
+            "threshold": best_result.threshold,
+            "best_params": _jsonable(best_result.best_params),
+        },
+        "best_model_summary.json",
+    )
+
+    if not register_model_name:
+        return None
+
+    model_uri = f"runs:/{mlflow.active_run().info.run_id}/final_model"
+    version = register_logged_model(model_uri, register_model_name)
+    mlflow.log_param("registered_model_name", register_model_name)
+    mlflow.log_param("registered_model_version", version)
+    return version
+
+
 def _benchmark_single_model(
     model_spec: ModelSpec,
     *,
@@ -222,6 +379,7 @@ def _benchmark_single_model(
 
     result = BenchmarkRunResult(
         model_name=model_spec.name,
+        run_id=None,
         best_params=search.best_params_,
         threshold=threshold_result.threshold,
         cv_business_cost=-float(search.best_score_),
@@ -268,38 +426,42 @@ def _benchmark_single_model(
     )
 
     _save_cv_results(search, output_dir / "cv_results", model_spec.name)
-    _save_prediction_tables(output_dir / "predictions", model_spec.name, oof_predictions, holdout_predictions)
+    _save_prediction_tables(
+        output_dir / "predictions",
+        model_spec.name,
+        oof_predictions,
+        holdout_predictions,
+    )
 
     return ModelBenchmarkArtifacts(
         result=result,
+        search=search,
         best_estimator=search.best_estimator_,
         oof_predictions=oof_predictions,
         holdout_predictions=holdout_predictions,
     )
 
 
-def run_benchmark_experiment(
+def _run_benchmark_body(
     dataframe: pd.DataFrame,
     *,
     settings: Settings,
-    output_dir: str | Path,
+    destination: Path,
     target_column: str,
     id_column: str,
     drop_columns: list[str],
-    model_names: list[str] | None = None,
-    test_dataframe: pd.DataFrame | None = None,
-    sample_size: int | None = None,
-    cv_folds: int | None = None,
-    association_sample_size: int = 100_000,
-    shap_sample_size: int = 1_500,
-    local_explanations: int = 3,
-    top_features: int = 20,
-    run_eda: bool = True,
+    model_names: list[str] | None,
+    test_dataframe: pd.DataFrame | None,
+    sample_size: int | None,
+    cv_folds: int,
+    association_sample_size: int,
+    shap_sample_size: int,
+    local_explanations: int,
+    top_features: int,
+    run_eda: bool,
+    enable_mlflow: bool,
+    register_model_name: str | None,
 ) -> pd.DataFrame:
-    destination = Path(output_dir)
-    destination.mkdir(parents=True, exist_ok=True)
-    cv_folds = cv_folds or settings.training.cv_folds
-
     experiment_frame = _sample_training_frame(
         dataframe,
         sample_size=sample_size,
@@ -337,22 +499,73 @@ def run_benchmark_experiment(
     results: list[BenchmarkRunResult] = []
     artifacts_by_model: dict[str, ModelBenchmarkArtifacts] = {}
 
+    if enable_mlflow:
+        mlflow.set_tags(
+            {
+                "stage": "benchmark",
+                "pipeline": "home_credit_build",
+                "target_column": target_column,
+                "decision_policy": "oof_business_cost_minimization",
+            }
+        )
+        mlflow.log_params(
+            {
+                "target_column": target_column,
+                "id_column": id_column,
+                "drop_columns": ",".join(drop_columns),
+                "candidate_models": ",".join(selected_model_names),
+                "sample_size": int(sample_size) if sample_size is not None else int(len(experiment_frame)),
+                "cv_folds": int(cv_folds),
+                "test_size": float(settings.dataset.test_size),
+                "fn_cost": float(settings.business.fn_cost),
+                "fp_cost": float(settings.business.fp_cost),
+                "association_sample_size": int(association_sample_size),
+                "shap_sample_size": int(shap_sample_size),
+                "local_explanations": int(local_explanations),
+                "top_features": int(top_features),
+                "run_eda": bool(run_eda),
+            }
+        )
+        mlflow.log_dict({"pipeline_steps": PIPELINE_STEPS}, "pipeline_overview.json")
+
     for model_name in selected_model_names:
         if model_name not in available_models:
             raise ValueError(f"Unknown model name: {model_name}")
 
-        artifacts = _benchmark_single_model(
-            available_models[model_name],
-            x_train=x_train,
-            y_train=y_train,
-            id_train=id_train,
-            x_holdout=x_holdout,
-            y_holdout=y_holdout,
-            id_holdout=id_holdout,
-            settings=settings,
-            cv_folds=cv_folds,
-            output_dir=destination,
-        )
+        if enable_mlflow:
+            with mlflow.start_run(run_name=model_name, nested=True) as candidate_run:
+                artifacts = _benchmark_single_model(
+                    available_models[model_name],
+                    x_train=x_train,
+                    y_train=y_train,
+                    id_train=id_train,
+                    x_holdout=x_holdout,
+                    y_holdout=y_holdout,
+                    id_holdout=id_holdout,
+                    settings=settings,
+                    cv_folds=cv_folds,
+                    output_dir=destination,
+                )
+                artifacts.result = replace(artifacts.result, run_id=candidate_run.info.run_id)
+                _log_candidate_run(
+                    artifacts,
+                    output_dir=destination,
+                    x_example=x_holdout,
+                )
+        else:
+            artifacts = _benchmark_single_model(
+                available_models[model_name],
+                x_train=x_train,
+                y_train=y_train,
+                id_train=id_train,
+                x_holdout=x_holdout,
+                y_holdout=y_holdout,
+                id_holdout=id_holdout,
+                settings=settings,
+                cv_folds=cv_folds,
+                output_dir=destination,
+            )
+
         results.append(artifacts.result)
         artifacts_by_model[model_name] = artifacts
 
@@ -415,13 +628,38 @@ def run_benchmark_experiment(
         )
         test_predictions.to_csv(destination / "best_model_test_predictions.csv", index=False)
 
+    decision_threshold = {
+        "model_name": best_model_name,
+        "threshold": float(best_result.threshold),
+        "selection_basis": "out_of_fold_business_cost_minimization",
+        "fn_cost": float(settings.business.fn_cost),
+        "fp_cost": float(settings.business.fp_cost),
+    }
+    (destination / "decision_threshold.json").write_text(
+        json.dumps(decision_threshold, indent=2),
+        encoding="utf-8",
+    )
+
+    registered_model_version = None
+    if enable_mlflow:
+        registered_model_version = _log_final_model(
+            final_pipeline,
+            features=features,
+            best_result=best_result,
+            register_model_name=register_model_name,
+        )
+
     metadata = {
+        "pipeline_steps": PIPELINE_STEPS,
         "sampled_rows": int(len(experiment_frame)),
         "sampled_columns": int(experiment_frame.shape[1]),
         "train_rows": int(len(x_train)),
         "holdout_rows": int(len(x_holdout)),
         "target_rate": float(experiment_frame[target_column].mean()),
         "cv_folds": int(cv_folds),
+        "mlflow_enabled": bool(enable_mlflow),
+        "registered_model_name": register_model_name,
+        "registered_model_version": registered_model_version,
         "best_model": _jsonable(asdict(best_result)),
     }
     (destination / "experiment_metadata.json").write_text(
@@ -430,17 +668,98 @@ def run_benchmark_experiment(
     )
     build_experiment_workbooks(destination)
 
+    if enable_mlflow:
+        mlflow.log_dict(metadata, "experiment_metadata.json")
+        _log_experiment_artifacts(destination)
+
     return results_frame
+
+
+def run_benchmark_experiment(
+    dataframe: pd.DataFrame,
+    *,
+    settings: Settings,
+    output_dir: str | Path,
+    target_column: str,
+    id_column: str,
+    drop_columns: list[str],
+    model_names: list[str] | None = None,
+    test_dataframe: pd.DataFrame | None = None,
+    sample_size: int | None = None,
+    cv_folds: int | None = None,
+    association_sample_size: int = 100_000,
+    shap_sample_size: int = 1_500,
+    local_explanations: int = 3,
+    top_features: int = 20,
+    run_eda: bool = True,
+    enable_mlflow: bool = True,
+    mlflow_run_name: str | None = None,
+    register_model_name: str | None = None,
+) -> pd.DataFrame:
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    effective_cv_folds = cv_folds or settings.training.cv_folds
+
+    if enable_mlflow:
+        configure_mlflow(settings)
+        run_name = mlflow_run_name or f"benchmark-{pd.Timestamp.now().strftime('%Y%m%d-%H%M%S')}"
+        with mlflow.start_run(run_name=run_name):
+            return _run_benchmark_body(
+                dataframe,
+                settings=settings,
+                destination=destination,
+                target_column=target_column,
+                id_column=id_column,
+                drop_columns=drop_columns,
+                model_names=model_names,
+                test_dataframe=test_dataframe,
+                sample_size=sample_size,
+                cv_folds=effective_cv_folds,
+                association_sample_size=association_sample_size,
+                shap_sample_size=shap_sample_size,
+                local_explanations=local_explanations,
+                top_features=top_features,
+                run_eda=run_eda,
+                enable_mlflow=True,
+                register_model_name=register_model_name,
+            )
+
+    return _run_benchmark_body(
+        dataframe,
+        settings=settings,
+        destination=destination,
+        target_column=target_column,
+        id_column=id_column,
+        drop_columns=drop_columns,
+        model_names=model_names,
+        test_dataframe=test_dataframe,
+        sample_size=sample_size,
+        cv_folds=effective_cv_folds,
+        association_sample_size=association_sample_size,
+        shap_sample_size=shap_sample_size,
+        local_explanations=local_explanations,
+        top_features=top_features,
+        run_eda=run_eda,
+        enable_mlflow=False,
+        register_model_name=register_model_name,
+    )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a consolidated Home Credit experiment with EDA, benchmarking, and SHAP."
+        description=(
+            "Run the consolidated Home Credit build: EDA, model benchmark, "
+            "threshold optimization, SHAP, Excel exports, and optional MLflow."
+        )
     )
     parser.add_argument("--config", default="configs/default.toml")
     parser.add_argument("--data", default=None, help="Training dataset path.")
     parser.add_argument("--test-data", default=None, help="Optional test dataset path.")
-    parser.add_argument("--output-dir", default=None, help="Output directory for reports and exports.")
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Output directory for reports and exports.",
+    )
     parser.add_argument("--target", default=None, help="Target column name.")
     parser.add_argument("--id-column", default=None, help="Identifier column name.")
     parser.add_argument(
@@ -496,6 +815,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip EDA artifact generation.",
     )
+    parser.add_argument(
+        "--skip-mlflow",
+        action="store_true",
+        help="Run locally without MLflow tracking.",
+    )
+    parser.add_argument(
+        "--mlflow-run-name",
+        default=None,
+        help="Optional root MLflow run name.",
+    )
+    parser.add_argument(
+        "--register-model-name",
+        default=None,
+        help="Optional MLflow Model Registry name for the final best model.",
+    )
     return parser.parse_args()
 
 
@@ -539,6 +873,9 @@ def main() -> None:
         local_explanations=args.local_explanations,
         top_features=args.top_features,
         run_eda=not args.skip_eda,
+        enable_mlflow=not args.skip_mlflow,
+        mlflow_run_name=args.mlflow_run_name,
+        register_model_name=args.register_model_name,
     )
 
     print(results.to_string(index=False))

@@ -5,7 +5,7 @@ Base project for the OpenClassrooms "Initiez-vous au MLOps" credit scoring exerc
 ## Main entrypoints
 
 - `scripts/build_home_credit_dataset.py`: step-1 dataset build from the raw Home Credit tables
-- `scripts/run_home_credit_experiment.py`: consolidated experiment pipeline with EDA, model benchmark, threshold optimization, SHAP, and Excel exports
+- `scripts/run_home_credit_experiment.py`: unified ML build with EDA, preprocessing, benchmark, threshold optimization, SHAP, Excel exports, and MLflow tracking
 - `scripts/mlflow_ui.py`: start the MLflow UI during the MLOps phase
 
 ## Project layout
@@ -27,14 +27,26 @@ home-credit-mlops/
 `-- tests/
 ```
 
-## Pattern used
+## Build schema
 
-This is the compromise that keeps the project readable without turning `scripts/` into a dumping ground:
+The project now follows one main ML path from end to end:
+
+1. `data/home_credit.py`
+   prepares, cleans, joins, and enriches the raw Home Credit tables.
+2. `features/preprocessing.py`
+   defines the preprocessing used by the models.
+3. `modeling/benchmark.py`
+   trains and compares candidate models with cross-validation, evaluates them,
+   optimizes the business decision threshold, exports diagnostics, and optionally logs everything in MLflow.
+4. `modeling/interpretability.py`
+   exports global feature importance and local and global SHAP explanations.
+5. `reporting/excel.py`
+   bundles the experiment outputs into Excel workbooks.
+
+So the pattern stays simple:
 
 - `scripts/` contains a few executable entrypoints
 - `src/home_credit_mlops/` contains the reusable, testable, importable logic
-
-So yes, your intuition was right: the issue was not the existence of scripts, but the fact that we had too many tiny wrappers.
 
 ## Important note about the environment
 
@@ -60,19 +72,25 @@ poetry install
 poetry run python scripts/build_home_credit_dataset.py
 ```
 
-3. Run the consolidated experiment pipeline:
+3. Run the unified experiment pipeline:
 
 ```bash
 poetry run python scripts/run_home_credit_experiment.py --model lightgbm --sample-size 5000 --cv-folds 3
 ```
 
-4. Open the MLflow UI when you work on the dedicated MLOps tracking step:
+4. Open the MLflow UI when you want to inspect the tracked runs:
 
 ```bash
 poetry run python scripts/mlflow_ui.py
 ```
 
-## What the consolidated experiment exports
+5. If needed, disable tracking for a quick local dry run:
+
+```bash
+poetry run python scripts/run_home_credit_experiment.py --skip-mlflow --sample-size 3000 --cv-folds 3
+```
+
+## What the unified experiment exports
 
 Each run under `reports/home_credit_experiments/<timestamp>/` includes:
 
@@ -81,6 +99,7 @@ Each run under `reports/home_credit_experiments/<timestamp>/` includes:
 - ROC, PR, and confusion-matrix diagnostics
 - grouped feature importance
 - SHAP global and local explanations
+- decision-threshold metadata
 - Excel workbooks for `eda`, `interpretability`, `diagnostics`, `predictions`, `cv_results`, and the root summary
 
 ## What this scaffold already covers
