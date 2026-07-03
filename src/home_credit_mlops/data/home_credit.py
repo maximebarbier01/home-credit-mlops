@@ -14,6 +14,7 @@ import seaborn as sns
 
 from home_credit_mlops.data.io import write_table
 from home_credit_mlops.logging_utils import configure_logging
+from home_credit_mlops.reporting.excel import build_workbook_from_directory
 from home_credit_mlops.settings import load_settings
 
 DAYS_SENTINEL = 365243
@@ -740,6 +741,12 @@ def build_home_credit_dataset(
     plot_target_distribution(train_frame, report_dir / "train_target_distribution.png")
     plot_missingness(train_frame, report_dir, "train_features")
 
+    (report_dir / "constant_columns_removed.json").write_text(
+        json.dumps(constant_columns, indent=2),
+        encoding="utf-8",
+    )
+
+    report_workbook_path = report_dir / f"{report_dir.name}.xlsx"
     metadata = {
         "pipeline_steps": [
             "data_preparation",
@@ -756,15 +763,13 @@ def build_home_credit_dataset(
         "train_output_path": train_output_path.as_posix(),
         "test_output_path": test_output_path.as_posix(),
         "report_dir": report_dir.as_posix(),
+        "report_workbook_path": report_workbook_path.as_posix(),
     }
     (report_dir / "dataset_metadata.json").write_text(
         json.dumps(metadata, indent=2),
         encoding="utf-8",
     )
-    (report_dir / "constant_columns_removed.json").write_text(
-        json.dumps(constant_columns, indent=2),
-        encoding="utf-8",
-    )
+    build_workbook_from_directory(report_dir, report_workbook_path)
 
     return metadata
 
@@ -819,7 +824,7 @@ def build_main() -> None:
     report_dir = (
         Path(args.report_dir)
         if args.report_dir
-        else settings.paths.reports_dir / "home_credit_step1"
+        else settings.paths.reports_dir / "home_credit_eda"
     )
 
     metadata = build_home_credit_dataset(raw_dir, train_output, test_output, report_dir)

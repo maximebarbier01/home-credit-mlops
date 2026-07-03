@@ -41,7 +41,8 @@ Ce script lance [src/home_credit_mlops/data/home_credit.py](/home/maxime/project
 Sorties principales :
 - `data/processed/train_features.parquet`
 - `data/processed/test_features.parquet`
-- `reports/home_credit_step1/`
+- `reports/home_credit_eda/`
+- `reports/home_credit_eda/home_credit_eda.xlsx`
 
 ---
 
@@ -106,6 +107,7 @@ Cette etape produit deja des rapports utiles :
 - missing values
 - profils de tables
 - coverage des jointures
+- un classeur Excel qui regroupe les CSV et JSON du dossier de rapports en onglets
 
 ---
 
@@ -332,10 +334,11 @@ poetry run python scripts/run_home_credit_experiment.py --model lightgbm --cv-fo
 - `data/processed/test_features.parquet`
 
 ### Step 1 data prep
-- `reports/home_credit_step1/table_profiles.csv`
-- `reports/home_credit_step1/merge_coverage.csv`
-- `reports/home_credit_step1/train_features_missingness.csv`
-- `reports/home_credit_step1/dataset_metadata.json`
+- `reports/home_credit_eda/table_profiles.csv`
+- `reports/home_credit_eda/merge_coverage.csv`
+- `reports/home_credit_eda/train_features_missingness.csv`
+- `reports/home_credit_eda/dataset_metadata.json`
+- `reports/home_credit_eda/home_credit_eda.xlsx`
 
 ### Experiment ML
 Dans `reports/home_credit_experiments/<timestamp>/` :

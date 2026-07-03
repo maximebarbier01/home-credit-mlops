@@ -4,7 +4,7 @@ Base project for the OpenClassrooms "Initiez-vous au MLOps" credit scoring exerc
 
 ## Main entrypoints
 
-- `scripts/build_home_credit_dataset.py`: step-1 dataset build from the raw Home Credit tables
+- `scripts/build_home_credit_dataset.py`: dataset build plus EDA-ready reports from the raw Home Credit tables
 - `scripts/run_home_credit_experiment.py`: unified ML build with EDA, preprocessing, benchmark, threshold optimization, SHAP, Excel exports, and MLflow tracking
 - `scripts/mlflow_ui.py`: start the MLflow UI during the MLOps phase
 - detailed French guide: `docs/mode_emploi_pipeline_ml.md`
@@ -68,7 +68,7 @@ poetry install
 
 1. Put the Kaggle files in `data/raw/`
 
-2. Build the cleaned and aggregated feature dataset:
+2. Build the cleaned and aggregated feature dataset and package the preparation reports into Excel:
 
 ```bash
 poetry run python scripts/build_home_credit_dataset.py
