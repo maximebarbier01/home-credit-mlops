@@ -14,7 +14,10 @@ import seaborn as sns
 
 from home_credit_mlops.data.io import write_table
 from home_credit_mlops.logging_utils import configure_logging
-from home_credit_mlops.reporting.excel import build_workbook_from_directory
+from home_credit_mlops.reporting.excel import (
+    build_workbook_from_directory,
+    remove_files_by_suffix,
+)
 from home_credit_mlops.settings import load_settings
 
 DAYS_SENTINEL = 365243
@@ -770,6 +773,7 @@ def build_home_credit_dataset(
         encoding="utf-8",
     )
     build_workbook_from_directory(report_dir, report_workbook_path)
+    remove_files_by_suffix(report_dir)
 
     return metadata
 
@@ -821,10 +825,11 @@ def build_main() -> None:
         if args.test_output
         else settings.paths.processed_dir / "test_features.parquet"
     )
+    date_prefix = pd.Timestamp.now().strftime("%Y%m%d")
     report_dir = (
         Path(args.report_dir)
         if args.report_dir
-        else settings.paths.reports_dir / "home_credit_eda"
+        else settings.paths.reports_dir / f"{date_prefix}_home_credit_eda"
     )
 
     metadata = build_home_credit_dataset(raw_dir, train_output, test_output, report_dir)

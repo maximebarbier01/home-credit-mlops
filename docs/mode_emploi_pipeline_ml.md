@@ -41,8 +41,8 @@ Ce script lance [src/home_credit_mlops/data/home_credit.py](/home/maxime/project
 Sorties principales :
 - `data/processed/train_features.parquet`
 - `data/processed/test_features.parquet`
-- `reports/home_credit_eda/`
-- `reports/home_credit_eda/home_credit_eda.xlsx`
+- `reports/YYYYMMDD_home_credit_eda/`
+- `reports/YYYYMMDD_home_credit_eda/YYYYMMDD_home_credit_eda.xlsx`
 
 ---
 
@@ -108,6 +108,7 @@ Cette etape produit deja des rapports utiles :
 - profils de tables
 - coverage des jointures
 - un classeur Excel qui regroupe les CSV et JSON du dossier de rapports en onglets
+- les CSV intermediaires sont ensuite supprimes du dossier de rapports
 
 ---
 
@@ -309,7 +310,7 @@ Configuration centrale du projet.
 ### Cas 2. Tu modifies un modele ou ses hyperparametres
 1. Tu modifies `modeling/candidates.py`
 2. Tu relances `run_home_credit_experiment.py`
-3. Tu regardes `benchmark_results.csv` et MLflow
+3. Tu regardes `summary.xlsx`, les classeurs de sous-dossiers et MLflow
 
 ### Cas 3. Tu veux aller vite
 Utilise par exemple :
@@ -334,20 +335,19 @@ poetry run python scripts/run_home_credit_experiment.py --model lightgbm --cv-fo
 - `data/processed/test_features.parquet`
 
 ### Step 1 data prep
-- `reports/home_credit_eda/table_profiles.csv`
-- `reports/home_credit_eda/merge_coverage.csv`
-- `reports/home_credit_eda/train_features_missingness.csv`
-- `reports/home_credit_eda/dataset_metadata.json`
-- `reports/home_credit_eda/home_credit_eda.xlsx`
+- `reports/YYYYMMDD_home_credit_eda/dataset_metadata.json`
+- `reports/YYYYMMDD_home_credit_eda/constant_columns_removed.json`
+- `reports/YYYYMMDD_home_credit_eda/YYYYMMDD_home_credit_eda.xlsx`
+- images de diagnostic de missing values et de target
 
 ### Experiment ML
-Dans `reports/home_credit_experiments/<timestamp>/` :
-- `benchmark_results.csv`
+Dans `reports/YYYYMMDD_home_credit_experiments/<timestamp>/` :
 - `experiment_metadata.json`
 - `decision_threshold.json`
-- `best_model_test_predictions.csv` si test fourni
-- dossiers `eda/`, `diagnostics/`, `interpretability/`, `predictions/`, `cv_results/`
 - `summary.xlsx`
+- dossiers `eda/`, `diagnostics/`, `interpretability/`, `predictions/`, `cv_results/`
+- un classeur Excel dans chacun de ces dossiers
+- fichiers parquet pour les predictions et les sorties conservees
 
 ---
 

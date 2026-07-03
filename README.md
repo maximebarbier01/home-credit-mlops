@@ -94,15 +94,16 @@ poetry run python scripts/run_home_credit_experiment.py --skip-mlflow --sample-s
 
 ## What the unified experiment exports
 
-Each run under `reports/home_credit_experiments/<timestamp>/` includes:
+Each run under `reports/YYYYMMDD_home_credit_experiments/<timestamp>/` includes:
 
-- benchmark tables and metadata
-- OOF and holdout predictions
+- a root `summary.xlsx` workbook
+- per-folder Excel workbooks for `eda`, `interpretability`, `diagnostics`, `predictions`, and `cv_results`
+- OOF and holdout prediction parquet files
 - ROC, PR, and confusion-matrix diagnostics
 - grouped feature importance
 - SHAP global and local explanations
 - decision-threshold metadata
-- Excel workbooks for `eda`, `interpretability`, `diagnostics`, `predictions`, `cv_results`, and the root summary
+- packaged reports where CSV exports are converted to Excel tabs and then removed
 
 ## What this scaffold already covers
 

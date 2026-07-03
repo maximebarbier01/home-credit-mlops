@@ -666,7 +666,7 @@ def _run_benchmark_body(
         json.dumps(metadata, indent=2),
         encoding="utf-8",
     )
-    build_experiment_workbooks(destination)
+    build_experiment_workbooks(destination, cleanup_csv=True)
 
     if enable_mlflow:
         mlflow.log_dict(metadata, "experiment_metadata.json")
@@ -851,8 +851,9 @@ def main() -> None:
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
+        date_prefix = pd.Timestamp.now().strftime("%Y%m%d")
         timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = settings.paths.reports_dir / "home_credit_experiments" / timestamp
+        output_dir = settings.paths.reports_dir / f"{date_prefix}_home_credit_experiments" / timestamp
 
     dataframe = read_table(data_path)
     test_dataframe = read_table(test_data_path) if test_data_path.exists() else None
