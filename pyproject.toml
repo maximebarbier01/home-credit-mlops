@@ -21,15 +21,6 @@ dependencies = [
     "openpyxl (>=3.1.5,<4.0.0)",
 ]
 
-[project.scripts]
-home-credit-build-dataset = "home_credit_mlops.data.home_credit:build_main"
-home-credit-profile-raw = "home_credit_mlops.data.home_credit:profile_main"
-home-credit-run-experiment = "home_credit_mlops.modeling.benchmark:main"
-home-credit-compare-models = "home_credit_mlops.modeling.training:compare_models_main"
-home-credit-train-model = "home_credit_mlops.modeling.training:train_model_main"
-home-credit-mlflow-ui = "home_credit_mlops.mlflow_utils:ui_main"
-home-credit-serve-model = "home_credit_mlops.mlflow_utils:serve_main"
-
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
