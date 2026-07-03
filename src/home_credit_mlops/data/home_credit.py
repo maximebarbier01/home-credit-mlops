@@ -13,6 +13,7 @@ import pandas as pd
 import seaborn as sns
 
 from home_credit_mlops.data.io import write_table
+from home_credit_mlops.eda.diagnostics import generate_home_credit_eda_artifacts
 from home_credit_mlops.logging_utils import configure_logging
 from home_credit_mlops.reporting.excel import (
     build_workbook_from_directory,
@@ -659,6 +660,12 @@ def build_home_credit_dataset(
     train_output_path: Path,
     test_output_path: Path,
     report_dir: Path,
+    *,
+    association_sample_size: int = 100_000,
+    top_associations: int = 25,
+    missing_top_n: int = 40,
+    matrix_sample_size: int = 2_000,
+    random_state: int = 42,
 ) -> dict[str, object]:
     report_dir.mkdir(parents=True, exist_ok=True)
 
@@ -724,25 +731,20 @@ def build_home_credit_dataset(
         index=False,
     )
     merge_coverage.to_csv(report_dir / "merge_coverage.csv", index=False)
-    build_missingness_report(train_frame).to_csv(
-        report_dir / "train_features_missingness.csv",
-        index=False,
+    generate_home_credit_eda_artifacts(
+        train_frame,
+        report_dir,
+        target_column="TARGET",
+        association_sample_size=association_sample_size,
+        top_associations=top_associations,
+        missing_top_n=missing_top_n,
+        matrix_sample_size=matrix_sample_size,
+        random_state=random_state,
     )
     build_missingness_report(test_frame).to_csv(
         report_dir / "test_features_missingness.csv",
         index=False,
     )
-
-    target_distribution = (
-        train_frame["TARGET"]
-        .value_counts(dropna=False)
-        .rename_axis("target")
-        .reset_index(name="count")
-    )
-    target_distribution["ratio"] = target_distribution["count"] / target_distribution["count"].sum()
-    target_distribution.to_csv(report_dir / "train_target_distribution.csv", index=False)
-    plot_target_distribution(train_frame, report_dir / "train_target_distribution.png")
-    plot_missingness(train_frame, report_dir, "train_features")
 
     (report_dir / "constant_columns_removed.json").write_text(
         json.dumps(constant_columns, indent=2),
@@ -752,10 +754,12 @@ def build_home_credit_dataset(
     report_workbook_path = report_dir / f"{report_dir.name}.xlsx"
     metadata = {
         "pipeline_steps": [
-            "data_preparation",
+            "data_ingestion",
             "variable_cleaning",
             "feature_engineering",
+            "data_quality_analysis",
             "dataset_export",
+            "report_packaging",
         ],
         "train_rows": int(len(train_frame)),
         "test_rows": int(len(test_frame)),
@@ -788,13 +792,40 @@ def parse_profile_args() -> argparse.Namespace:
 
 def parse_build_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build a cleaned and aggregated Home Credit feature dataset."
+        description=(
+            "Build the Home Credit dataset: cleaning, feature engineering, "
+            "final dataset exports, and data-preparation EDA reports."
+        )
     )
     parser.add_argument("--config", default="configs/default.toml")
     parser.add_argument("--raw-dir", default=None)
     parser.add_argument("--train-output", default=None)
     parser.add_argument("--test-output", default=None)
     parser.add_argument("--report-dir", default=None)
+    parser.add_argument(
+        "--association-sample-size",
+        type=int,
+        default=100_000,
+        help="Maximum number of rows used for feature-target association analysis.",
+    )
+    parser.add_argument(
+        "--top-associations",
+        type=int,
+        default=25,
+        help="Maximum number of strongest associations shown in EDA plots.",
+    )
+    parser.add_argument(
+        "--missing-top-n",
+        type=int,
+        default=40,
+        help="Maximum number of missing-value features highlighted in reports.",
+    )
+    parser.add_argument(
+        "--matrix-sample-size",
+        type=int,
+        default=2_000,
+        help="Maximum number of rows used for the missingness matrix plot.",
+    )
     return parser.parse_args()
 
 
@@ -829,8 +860,18 @@ def build_main() -> None:
     report_dir = (
         Path(args.report_dir)
         if args.report_dir
-        else settings.paths.reports_dir / f"{date_prefix}_home_credit_eda"
+        else settings.paths.reports_dir / f"{date_prefix}_home_credit_data_prep"
     )
 
-    metadata = build_home_credit_dataset(raw_dir, train_output, test_output, report_dir)
+    metadata = build_home_credit_dataset(
+        raw_dir,
+        train_output,
+        test_output,
+        report_dir,
+        association_sample_size=args.association_sample_size,
+        top_associations=args.top_associations,
+        missing_top_n=args.missing_top_n,
+        matrix_sample_size=args.matrix_sample_size,
+        random_state=settings.dataset.random_state,
+    )
     print(json.dumps(metadata, indent=2))

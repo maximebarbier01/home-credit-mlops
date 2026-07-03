@@ -41,8 +41,8 @@ Ce script lance [src/home_credit_mlops/data/home_credit.py](/home/maxime/project
 Sorties principales :
 - `data/processed/train_features.parquet`
 - `data/processed/test_features.parquet`
-- `reports/YYYYMMDD_home_credit_eda/`
-- `reports/YYYYMMDD_home_credit_eda/YYYYMMDD_home_credit_eda.xlsx`
+- `reports/YYYYMMDD_home_credit_data_prep/`
+- `reports/YYYYMMDD_home_credit_data_prep/YYYYMMDD_home_credit_data_prep.xlsx`
 
 ---
 
@@ -58,7 +58,7 @@ poetry run python scripts/run_home_credit_experiment.py --model lightgbm --sampl
 
 Ce script lance [src/home_credit_mlops/modeling/benchmark.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/modeling/benchmark.py).
 
-C'est le coeur du pipeline ML.
+C'est le coeur de la phase modelisation, sans relancer l'EDA du dataset.
 
 ---
 
@@ -145,7 +145,7 @@ Elle exporte notamment :
 - variables les plus associees a la target
 - modalites associees positivement ou negativement au risque
 
-Cette etape est appelee automatiquement depuis `benchmark.py`, sauf si tu passes `--skip-eda`.
+Cette etape fait partie du script de data preparation et est executee pendant `build_home_credit_dataset.py`.
 
 ---
 
@@ -247,7 +247,7 @@ Fichier principal : [src/home_credit_mlops/reporting/excel.py](/home/maxime/proj
 
 Le pipeline regroupe automatiquement les sorties en classeurs Excel :
 - un classeur resume a la racine du run
-- un classeur par dossier de sortie (`eda`, `diagnostics`, `interpretability`, etc.)
+- un classeur par dossier de sortie (`diagnostics`, `interpretability`, `predictions`, `cv_results`, etc.)
 
 Cela evite d'avoir trop de fichiers isoles a ouvrir un par un.
 
@@ -335,10 +335,11 @@ poetry run python scripts/run_home_credit_experiment.py --model lightgbm --cv-fo
 - `data/processed/test_features.parquet`
 
 ### Step 1 data prep
-- `reports/YYYYMMDD_home_credit_eda/dataset_metadata.json`
-- `reports/YYYYMMDD_home_credit_eda/constant_columns_removed.json`
-- `reports/YYYYMMDD_home_credit_eda/YYYYMMDD_home_credit_eda.xlsx`
-- images de diagnostic de missing values et de target
+- `reports/YYYYMMDD_home_credit_data_prep/dataset_metadata.json`
+- `reports/YYYYMMDD_home_credit_data_prep/constant_columns_removed.json`
+- `reports/YYYYMMDD_home_credit_data_prep/eda_metadata.json`
+- `reports/YYYYMMDD_home_credit_data_prep/YYYYMMDD_home_credit_data_prep.xlsx`
+- images de diagnostic de missing values, target et associations avec la target
 
 ### Experiment ML
 Dans `reports/YYYYMMDD_home_credit_experiments/<timestamp>/` :
@@ -346,7 +347,7 @@ Dans `reports/YYYYMMDD_home_credit_experiments/<timestamp>/` :
 - `decision_threshold.json`
 - `summary.xlsx`
 - un onglet `model_performance_summary` dans `summary.xlsx` pour comparer les modeles testes dans une logique commune
-- dossiers `eda/`, `diagnostics/`, `interpretability/`, `predictions/`, `cv_results/`
+- dossiers `diagnostics/`, `interpretability/`, `predictions/`, `cv_results/`
 - un classeur Excel dans chacun de ces dossiers
 - fichiers parquet pour les predictions et les sorties conservees
 
