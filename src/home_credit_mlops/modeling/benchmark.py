@@ -10,6 +10,8 @@ import re
 from typing import Any
 
 import matplotlib.pyplot as plt
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline as ImbPipeline
 import mlflow
 import mlflow.sklearn
 from mlflow.models import infer_signature
@@ -32,7 +34,12 @@ from home_credit_mlops.data.io import read_table
 from home_credit_mlops.features.preprocessing import build_preprocessor, split_features_target
 from home_credit_mlops.logging_utils import configure_logging
 from home_credit_mlops.mlflow_utils import configure_mlflow, register_logged_model
-from home_credit_mlops.modeling.candidates import ModelSpec, get_model_specs
+from home_credit_mlops.modeling.candidates import (
+    DEFAULT_SAMPLING_STRATEGIES,
+    VALID_SAMPLING_STRATEGIES,
+    ModelSpec,
+    build_candidate_model_specs,
+)
 from home_credit_mlops.modeling.interpretability import (
     export_feature_importance,
     export_shap_analysis,
@@ -58,11 +65,15 @@ PIPELINE_STEPS = [
     "interpretability_export",
     "report_packaging",
 ]
+SMOTE_SAMPLING_STRATEGY = 0.3
+SMOTE_K_NEIGHBORS = 5
 
 
 @dataclass(frozen=True)
 class BenchmarkRunResult:
     model_name: str
+    base_model_name: str
+    sampling_strategy: str
     run_id: str | None
     best_params: dict[str, Any]
     threshold: float
@@ -116,12 +127,35 @@ def _jsonable(mapping: dict[str, Any]) -> dict[str, Any]:
     return jsonable
 
 
-def _build_pipeline(model_spec: ModelSpec, features: pd.DataFrame) -> Pipeline:
+def _build_smote_sampler(settings: Settings) -> SMOTE:
+    return SMOTE(
+        sampling_strategy=SMOTE_SAMPLING_STRATEGY,
+        k_neighbors=SMOTE_K_NEIGHBORS,
+        random_state=settings.dataset.random_state,
+    )
+
+
+def _build_pipeline(
+    model_spec: ModelSpec,
+    features: pd.DataFrame,
+    settings: Settings,
+) -> Pipeline | ImbPipeline:
     preprocessor, _, _ = build_preprocessor(features)
+    model = model_spec.estimator_factory()
+
+    if model_spec.sampling_strategy == "smote":
+        return ImbPipeline(
+            steps=[
+                ("preprocessor", preprocessor),
+                ("sampler", _build_smote_sampler(settings)),
+                ("model", model),
+            ]
+        )
+
     return Pipeline(
         steps=[
             ("preprocessor", preprocessor),
-            ("model", model_spec.estimator_factory()),
+            ("model", model),
         ]
     )
 
@@ -271,6 +305,7 @@ def _slugify_campaign_name(value: str) -> str:
 
 def _build_default_campaign_name(
     model_names: list[str] | None,
+    sampling_strategies: list[str] | None,
     sample_size: int | None,
     cv_folds: int,
 ) -> str:
@@ -281,8 +316,17 @@ def _build_default_campaign_name(
     else:
         model_token = f"{len(model_names)}_models"
 
+    if not sampling_strategies or sampling_strategies == ["baseline"]:
+        sampling_token = "baseline"
+    elif len(sampling_strategies) == 1:
+        sampling_token = sampling_strategies[0]
+    else:
+        sampling_token = f"{len(sampling_strategies)}_sampling_modes"
+
     sample_token = "full_dataset" if sample_size is None else f"{sample_size}_rows"
-    return _slugify_campaign_name(f"benchmark_{model_token}_{sample_token}_cv{cv_folds}")
+    return _slugify_campaign_name(
+        f"benchmark_{model_token}_{sampling_token}_{sample_token}_cv{cv_folds}"
+    )
 
 
 def _build_campaign_overview(
@@ -295,6 +339,7 @@ def _build_campaign_overview(
     id_column: str,
     drop_columns: list[str],
     selected_model_names: list[str],
+    sampling_strategies: list[str],
     sample_size: int | None,
     experiment_frame: pd.DataFrame,
     train_rows: int,
@@ -323,6 +368,7 @@ def _build_campaign_overview(
         "drop_columns": json.dumps(drop_columns),
         "candidate_models": ",".join(selected_model_names),
         "candidate_model_count": len(selected_model_names),
+        "sampling_strategies": ",".join(sampling_strategies),
         "sample_size_requested": sample_size if sample_size is not None else "full_dataset",
         "sampled_rows": int(len(experiment_frame)),
         "sampled_columns": int(experiment_frame.shape[1]),
@@ -347,8 +393,10 @@ def _build_cv_summary(results_frame: pd.DataFrame, *, best_model_name: str) -> p
     summary = results_frame.copy()
     summary.insert(0, "selected_as_best", summary["model_name"] == best_model_name)
     summary["model"] = summary["model_name"]
+    summary["base_model"] = summary["base_model_name"]
+    summary["sampling"] = summary["sampling_strategy"]
     ordered_cols = [
-        "selected_as_best", "model", "threshold", "cv_business_cost", "cv_roc_auc",
+        "selected_as_best", "model", "base_model", "sampling", "threshold", "cv_business_cost", "cv_roc_auc",
         "cv_average_precision", "cv_accuracy", "cv_balanced_accuracy", "oof_roc_auc",
         "oof_average_precision", "oof_precision", "oof_recall", "oof_f1",
         "oof_accuracy", "oof_balanced_accuracy", "best_params", "run_id",
@@ -360,8 +408,10 @@ def _build_holdout_summary(results_frame: pd.DataFrame, *, best_model_name: str)
     summary = results_frame.copy()
     summary.insert(0, "selected_as_best", summary["model_name"] == best_model_name)
     summary["model"] = summary["model_name"]
+    summary["base_model"] = summary["base_model_name"]
+    summary["sampling"] = summary["sampling_strategy"]
     ordered_cols = [
-        "selected_as_best", "model", "threshold", "holdout_business_cost",
+        "selected_as_best", "model", "base_model", "sampling", "threshold", "holdout_business_cost",
         "holdout_business_score", "holdout_roc_auc", "holdout_average_precision",
         "holdout_accuracy", "holdout_balanced_accuracy", "holdout_precision",
         "holdout_recall", "holdout_f1", "holdout_brier_score", "holdout_ks_statistic",
@@ -375,9 +425,11 @@ def _build_decision_threshold_summary(results_frame: pd.DataFrame, *, best_model
     summary = results_frame.copy()
     summary.insert(0, "selected_as_best", summary["model_name"] == best_model_name)
     summary["model"] = summary["model_name"]
+    summary["base_model"] = summary["base_model_name"]
+    summary["sampling"] = summary["sampling_strategy"]
     summary["selection_basis"] = "out_of_fold_business_cost_minimization"
     ordered_cols = [
-        "selected_as_best", "model", "selection_basis", "threshold",
+        "selected_as_best", "model", "base_model", "sampling", "selection_basis", "threshold",
         "holdout_business_cost", "holdout_business_score", "holdout_precision",
         "holdout_recall", "holdout_f1", "true_negatives", "false_positives",
         "false_negatives", "true_positives", "run_id",
@@ -390,6 +442,8 @@ def _build_mlflow_runs_summary(results_frame: pd.DataFrame, *, campaign_name: st
         "scope": "campaign",
         "campaign_name": campaign_name,
         "model": "",
+        "base_model": "",
+        "sampling": "",
         "run_id": root_run_id or "",
         "selected_as_best": False,
         "threshold": np.nan,
@@ -401,6 +455,8 @@ def _build_mlflow_runs_summary(results_frame: pd.DataFrame, *, campaign_name: st
             "scope": "model",
             "campaign_name": campaign_name,
             "model": row.model_name,
+            "base_model": row.base_model_name,
+            "sampling": row.sampling_strategy,
             "run_id": row.run_id or "",
             "selected_as_best": row.model_name == best_model_name,
             "threshold": float(row.threshold),
@@ -427,6 +483,8 @@ def _build_model_performance_summary(
         if model_name in available_models
     }
     summary["model"] = summary["model_name"]
+    summary["base_model"] = summary["base_model_name"]
+    summary["sampling"] = summary["sampling_strategy"]
     summary["estimator_class"] = summary["model"].map(estimator_class_lookup)
     summary["family"] = summary["estimator_class"].map(_model_family_from_estimator_class)
     summary["strategie_seuil"] = "cv_business_cost_optimized"
@@ -465,6 +523,8 @@ def _build_model_performance_summary(
         "rank",
         "selected_as_best",
         "model",
+        "base_model",
+        "sampling",
         "family",
         "estimator_class",
         "strategie_seuil",
@@ -508,9 +568,13 @@ def _log_candidate_run(
             "pipeline": "home_credit_build",
             "campaign_name": campaign_name,
             "model_name": result.model_name,
+            "base_model_name": result.base_model_name,
+            "sampling_strategy": result.sampling_strategy,
         }
     )
     mlflow.log_param("model_name", result.model_name)
+    mlflow.log_param("base_model_name", result.base_model_name)
+    mlflow.log_param("sampling_strategy", result.sampling_strategy)
     mlflow.log_params(
         {
             key: (value if isinstance(value, (str, int, float, bool)) else json.dumps(value))
@@ -567,7 +631,7 @@ def _cleanup_experiment_csv_files(output_dir: Path) -> None:
 
 
 def _log_final_model(
-    pipeline: Pipeline,
+    pipeline: Pipeline | ImbPipeline,
     *,
     features: pd.DataFrame,
     best_result: BenchmarkRunResult,
@@ -617,7 +681,7 @@ def _benchmark_single_model(
     cv_folds: int,
     output_dir: Path,
 ) -> ModelBenchmarkArtifacts:
-    pipeline = _build_pipeline(model_spec, x_train)
+    pipeline = _build_pipeline(model_spec, x_train, settings)
     cv = StratifiedKFold(
         n_splits=cv_folds,
         shuffle=True,
@@ -664,6 +728,8 @@ def _benchmark_single_model(
 
     result = BenchmarkRunResult(
         model_name=model_spec.name,
+        base_model_name=model_spec.base_model_name,
+        sampling_strategy=model_spec.sampling_strategy,
         run_id=None,
         best_params=search.best_params_,
         threshold=threshold_result.threshold,
@@ -746,6 +812,7 @@ def _run_benchmark_body(
     id_column: str,
     drop_columns: list[str],
     model_names: list[str] | None,
+    sampling_strategies: list[str] | None,
     test_dataframe: pd.DataFrame | None,
     sample_size: int | None,
     cv_folds: int,
@@ -778,8 +845,12 @@ def _run_benchmark_body(
         stratify=target,
     )
 
-    available_models = get_model_specs()
-    selected_model_names = model_names or list(available_models.keys())
+    sampling_modes = list(dict.fromkeys(sampling_strategies or list(DEFAULT_SAMPLING_STRATEGIES)))
+    available_models = build_candidate_model_specs(
+        model_names=model_names,
+        sampling_strategies=sampling_modes,
+    )
+    selected_model_names = list(available_models.keys())
     created_at = pd.Timestamp.now().isoformat()
     campaign_slug = _slugify_campaign_name(campaign_name)
     results: list[BenchmarkRunResult] = []
@@ -821,6 +892,7 @@ def _run_benchmark_body(
                 "id_column": id_column,
                 "drop_columns": ",".join(drop_columns),
                 "candidate_models": ",".join(selected_model_names),
+                "sampling_strategies": ",".join(sampling_modes),
                 "sample_size": int(sample_size) if sample_size is not None else int(len(experiment_frame)),
                 "cv_folds": int(cv_folds),
                 "n_jobs": int(settings.training.n_jobs),
@@ -919,7 +991,7 @@ def _run_benchmark_body(
         y_holdout=y_holdout,
     )
 
-    final_pipeline = _build_pipeline(best_model_spec, features)
+    final_pipeline = _build_pipeline(best_model_spec, features, settings)
     final_pipeline.set_params(**best_result.best_params)
     final_pipeline.fit(features, target)
 
@@ -985,6 +1057,7 @@ def _run_benchmark_body(
         id_column=id_column,
         drop_columns=drop_columns,
         selected_model_names=selected_model_names,
+        sampling_strategies=sampling_modes,
         sample_size=sample_size,
         experiment_frame=experiment_frame,
         train_rows=len(x_train),
@@ -1012,6 +1085,7 @@ def _run_benchmark_body(
         "output_dir": destination.as_posix(),
         "pipeline_steps": PIPELINE_STEPS,
         "candidate_models": selected_model_names,
+        "sampling_strategies": sampling_modes,
         "sample_size_requested": sample_size,
         "sampled_rows": int(len(experiment_frame)),
         "sampled_columns": int(experiment_frame.shape[1]),
@@ -1052,6 +1126,7 @@ def run_benchmark_experiment(
     id_column: str,
     drop_columns: list[str],
     model_names: list[str] | None = None,
+    sampling_strategies: list[str] | None = None,
     test_dataframe: pd.DataFrame | None = None,
     sample_size: int | None = None,
     cv_folds: int | None = None,
@@ -1081,6 +1156,7 @@ def run_benchmark_experiment(
                 id_column=id_column,
                 drop_columns=drop_columns,
                 model_names=model_names,
+                sampling_strategies=sampling_strategies,
                 test_dataframe=test_dataframe,
                 sample_size=sample_size,
                 cv_folds=effective_cv_folds,
@@ -1102,6 +1178,7 @@ def run_benchmark_experiment(
         id_column=id_column,
         drop_columns=drop_columns,
         model_names=model_names,
+        sampling_strategies=sampling_strategies,
         test_dataframe=test_dataframe,
         sample_size=sample_size,
         cv_folds=effective_cv_folds,
@@ -1145,7 +1222,14 @@ def parse_args() -> argparse.Namespace:
         "--model",
         action="append",
         default=[],
-        help="Model name to evaluate. Can be repeated. Defaults to all candidates.",
+        help="Base model name to evaluate. Can be repeated. Defaults to all base models.",
+    )
+    parser.add_argument(
+        "--sampling",
+        action="append",
+        choices=sorted(VALID_SAMPLING_STRATEGIES),
+        default=[],
+        help="Sampling strategy to evaluate. Can be repeated. Defaults to baseline only.",
     )
     parser.add_argument(
         "--sample-size",
@@ -1215,9 +1299,11 @@ def main() -> None:
         )
 
     effective_model_names = args.model or None
+    effective_sampling_strategies = list(dict.fromkeys(args.sampling or list(DEFAULT_SAMPLING_STRATEGIES)))
     effective_cv_folds = args.cv_folds or settings.training.cv_folds
     campaign_name = args.campaign_name or _build_default_campaign_name(
         effective_model_names,
+        effective_sampling_strategies,
         args.sample_size,
         effective_cv_folds,
     )
@@ -1258,6 +1344,7 @@ def main() -> None:
         id_column=id_column,
         drop_columns=drop_columns,
         model_names=effective_model_names,
+        sampling_strategies=effective_sampling_strategies,
         test_dataframe=test_dataframe,
         sample_size=args.sample_size,
         cv_folds=args.cv_folds,
