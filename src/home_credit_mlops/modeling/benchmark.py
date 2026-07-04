@@ -198,6 +198,23 @@ def _plot_holdout_diagnostics(
     plt.close()
 
 
+def _export_all_model_diagnostics(
+    output_dir: Path,
+    *,
+    artifacts_by_model: dict[str, ModelBenchmarkArtifacts],
+    y_holdout: pd.Series,
+) -> None:
+    diagnostics_root = output_dir / "diagnostics"
+    for model_name, artifacts in artifacts_by_model.items():
+        _plot_holdout_diagnostics(
+            diagnostics_root / model_name,
+            model_name,
+            y_holdout.to_numpy(),
+            artifacts.holdout_predictions["probability"].to_numpy(),
+            artifacts.result.threshold,
+        )
+
+
 def _build_scoring(settings: Settings) -> dict[str, Any]:
     return {
         "business_score": partial(
@@ -896,12 +913,10 @@ def _run_benchmark_body(
     best_result = best_artifacts.result
     best_model_spec = available_models[best_model_name]
 
-    _plot_holdout_diagnostics(
-        destination / "diagnostics",
-        best_model_name,
-        y_holdout.to_numpy(),
-        best_artifacts.holdout_predictions["probability"].to_numpy(),
-        best_result.threshold,
+    _export_all_model_diagnostics(
+        destination,
+        artifacts_by_model=artifacts_by_model,
+        y_holdout=y_holdout,
     )
 
     final_pipeline = _build_pipeline(best_model_spec, features)

@@ -92,6 +92,19 @@ def remove_files_by_suffix(
     return removed_paths
 
 
+def _iter_supported_files(source: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in source.rglob('*')
+        if path.is_file() and path.suffix.lower() in (TABLE_SUFFIXES | IMAGE_SUFFIXES)
+    )
+
+
+def _sheet_base_name(path: Path, source: Path, *, is_image: bool = False) -> str:
+    relative_stem = path.relative_to(source).with_suffix('').as_posix().replace('/', '__')
+    return f"img_{relative_stem}" if is_image else relative_stem
+
+
 def build_workbook_from_directory(
     source_dir: str | Path,
     workbook_path: str | Path,
@@ -100,11 +113,7 @@ def build_workbook_from_directory(
     if not source.exists():
         return None
 
-    supported_files = sorted(
-        path
-        for path in source.iterdir()
-        if path.is_file() and path.suffix.lower() in (TABLE_SUFFIXES | IMAGE_SUFFIXES)
-    )
+    supported_files = _iter_supported_files(source)
     if not supported_files:
         return None
 
@@ -134,7 +143,7 @@ def build_workbook_from_directory(
             if path.suffix.lower() not in TABLE_SUFFIXES:
                 continue
             frame = _read_supported_table(path)
-            sheet_name = _sanitize_sheet_name(path.stem, existing_names)
+            sheet_name = _sanitize_sheet_name(_sheet_base_name(path, source), existing_names)
             frame.to_excel(writer, sheet_name=sheet_name, index=False)
             worksheet = writer.book[sheet_name]
             worksheet.freeze_panes = "A2"
@@ -143,10 +152,13 @@ def build_workbook_from_directory(
         for path in supported_files:
             if path.suffix.lower() not in IMAGE_SUFFIXES:
                 continue
-            sheet_name = _sanitize_sheet_name(f"img_{path.stem}", existing_names)
+            sheet_name = _sanitize_sheet_name(
+                _sheet_base_name(path, source, is_image=True),
+                existing_names,
+            )
             worksheet = writer.book.create_sheet(sheet_name)
             worksheet["A1"] = path.name
-            worksheet["A2"] = path.as_posix()
+            worksheet["A2"] = path.relative_to(source).as_posix()
             image = ExcelImage(path.as_posix())
             _resize_image(image)
             worksheet.add_image(image, "A4")
@@ -161,7 +173,14 @@ def build_experiment_workbooks(
 ) -> list[Path]:
     root = Path(output_dir)
     workbooks: list[Path] = []
-    directories = sorted(path for path in root.iterdir() if path.is_dir()) if root.exists() else []
+    directories = (
+        sorted(
+            (path for path in root.rglob('*') if path.is_dir()),
+            key=lambda directory: (len(directory.parts), directory.as_posix()),
+        )
+        if root.exists()
+        else []
+    )
 
     root_workbook = build_workbook_from_directory(root, root / "summary.xlsx")
     if root_workbook is not None:
