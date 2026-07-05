@@ -82,7 +82,7 @@ poetry run python scripts/build_home_credit_dataset.py
 poetry run python scripts/run_home_credit_experiment.py --campaign-name dev_lightgbm_5k_cv3 --model lightgbm --sample-size 5000 --cv-folds 3 --n-jobs 1
 ```
 
-To compare imbalance handling strategies, you can benchmark the same base model with and without oversampling:
+To compare imbalance handling strategies, you can benchmark the same base model with several sampling modes such as `baseline`, `smote`, `borderline_smote`, `adasyn`, and `smote_under`:
 
 ```bash
 poetry run python scripts/run_home_credit_experiment.py --campaign-name dev_logreg_baseline_smote --model logistic_regression --sampling baseline --sampling smote --sample-size 5000 --cv-folds 3 --n-jobs 1

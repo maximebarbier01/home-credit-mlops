@@ -10,8 +10,9 @@ import re
 from typing import Any
 
 import matplotlib.pyplot as plt
-from imblearn.over_sampling import SMOTE
+from imblearn.over_sampling import ADASYN, BorderlineSMOTE, SMOTE
 from imblearn.pipeline import Pipeline as ImbPipeline
+from imblearn.under_sampling import RandomUnderSampler
 import mlflow
 import mlflow.sklearn
 from mlflow.models import infer_signature
@@ -65,8 +66,9 @@ PIPELINE_STEPS = [
     "interpretability_export",
     "report_packaging",
 ]
-SMOTE_SAMPLING_STRATEGY = 0.3
-SMOTE_K_NEIGHBORS = 5
+OVERSAMPLING_STRATEGY = 0.3
+OVERSAMPLING_K_NEIGHBORS = 5
+UNDERSAMPLING_STRATEGY = 0.7
 
 
 @dataclass(frozen=True)
@@ -110,7 +112,7 @@ class BenchmarkRunResult:
 class ModelBenchmarkArtifacts:
     result: BenchmarkRunResult
     search: GridSearchCV
-    best_estimator: Pipeline
+    best_estimator: Pipeline | ImbPipeline
     oof_predictions: pd.DataFrame
     holdout_predictions: pd.DataFrame
 
@@ -129,10 +131,54 @@ def _jsonable(mapping: dict[str, Any]) -> dict[str, Any]:
 
 def _build_smote_sampler(settings: Settings) -> SMOTE:
     return SMOTE(
-        sampling_strategy=SMOTE_SAMPLING_STRATEGY,
-        k_neighbors=SMOTE_K_NEIGHBORS,
+        sampling_strategy=OVERSAMPLING_STRATEGY,
+        k_neighbors=OVERSAMPLING_K_NEIGHBORS,
         random_state=settings.dataset.random_state,
     )
+
+
+def _build_borderline_smote_sampler(settings: Settings) -> BorderlineSMOTE:
+    return BorderlineSMOTE(
+        sampling_strategy=OVERSAMPLING_STRATEGY,
+        k_neighbors=OVERSAMPLING_K_NEIGHBORS,
+        random_state=settings.dataset.random_state,
+    )
+
+
+def _build_adasyn_sampler(settings: Settings) -> ADASYN:
+    return ADASYN(
+        sampling_strategy=OVERSAMPLING_STRATEGY,
+        n_neighbors=OVERSAMPLING_K_NEIGHBORS,
+        random_state=settings.dataset.random_state,
+    )
+
+
+def _build_under_sampler(settings: Settings) -> RandomUnderSampler:
+    return RandomUnderSampler(
+        sampling_strategy=UNDERSAMPLING_STRATEGY,
+        random_state=settings.dataset.random_state,
+    )
+
+
+def _build_sampling_steps(
+    model_spec: ModelSpec,
+    settings: Settings,
+) -> list[tuple[str, Any]]:
+    sampling_strategy = model_spec.sampling_strategy
+    if sampling_strategy == "baseline":
+        return []
+    if sampling_strategy == "smote":
+        return [("sampler", _build_smote_sampler(settings))]
+    if sampling_strategy == "borderline_smote":
+        return [("sampler", _build_borderline_smote_sampler(settings))]
+    if sampling_strategy == "adasyn":
+        return [("sampler", _build_adasyn_sampler(settings))]
+    if sampling_strategy == "smote_under":
+        return [
+            ("over", _build_smote_sampler(settings)),
+            ("under", _build_under_sampler(settings)),
+        ]
+    raise ValueError(f"Unsupported sampling strategy: {sampling_strategy}")
 
 
 def _build_pipeline(
@@ -142,12 +188,13 @@ def _build_pipeline(
 ) -> Pipeline | ImbPipeline:
     preprocessor, _, _ = build_preprocessor(features)
     model = model_spec.estimator_factory()
+    sampling_steps = _build_sampling_steps(model_spec, settings)
 
-    if model_spec.sampling_strategy == "smote":
+    if sampling_steps:
         return ImbPipeline(
             steps=[
                 ("preprocessor", preprocessor),
-                ("sampler", _build_smote_sampler(settings)),
+                *sampling_steps,
                 ("model", model),
             ]
         )

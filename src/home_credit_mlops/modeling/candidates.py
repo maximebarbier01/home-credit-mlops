@@ -9,7 +9,13 @@ from sklearn.linear_model import LogisticRegression
 
 
 EstimatorFactory = Callable[[], Any]
-VALID_SAMPLING_STRATEGIES = ("baseline", "smote")
+VALID_SAMPLING_STRATEGIES = (
+    "baseline",
+    "smote",
+    "borderline_smote",
+    "adasyn",
+    "smote_under",
+)
 DEFAULT_SAMPLING_STRATEGIES = ("baseline",)
 
 
