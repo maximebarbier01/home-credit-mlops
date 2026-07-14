@@ -353,8 +353,9 @@ Dans `reports/YYYYMMDD_home_credit_experiments/<timestamp>_<campaign_name>/` :
 - `decision_threshold.json`
 - `summary.xlsx`
 - des onglets de synthese comme `campaign_overview`, `model_performance_summary`, `cv_summary`, `holdout_summary`, `decision_threshold_summary` et `mlflow_runs`
-- dossiers `diagnostics/`, `interpretability/`, `predictions/`, `cv_results/`
+- dossiers `diagnostics/`, `interpretability/`, `predictions/`, `cv_results/`, `threshold_optimization/`
 - un classeur Excel dans chacun de ces dossiers
+- des courbes d'optimisation du seuil, dont le cout metier vs seuil pour justifier la decision finale
 - fichiers parquet pour les predictions et les sorties conservees
 
 ---
