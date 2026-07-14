@@ -1,3 +1,5 @@
+"""Exports d'interpretabilite globale et locale, notamment avec SHAP."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,6 +21,8 @@ warnings.filterwarnings(
 
 
 def _get_feature_name_mapping(preprocessor) -> pd.DataFrame:
+    # Ce mapping relie les colonnes transformees (apres OHE) aux
+    # variables sources pour garder une lecture metier des explications.
     transformed_features = preprocessor.get_feature_names_out().tolist()
     transformer_columns = {
         name: list(columns)
@@ -230,6 +234,8 @@ def export_shap_analysis(
     source_lookup = mapping.set_index("transformed_feature")["source_feature"]
     feature_kind_lookup = mapping.set_index("transformed_feature")["feature_kind"]
 
+    # On exporte a la fois la vue detaillee par colonne transformee et
+    # une vue regroupee par variable source, plus lisible pour le metier.
     global_transformed = pd.DataFrame(
         {
             "transformed_feature": transformed_frame.columns,

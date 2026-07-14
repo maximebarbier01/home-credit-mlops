@@ -1,3 +1,5 @@
+"""Definition des modeles candidats et des variantes de sampling a comparer."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -121,6 +123,8 @@ def build_candidate_model_specs(
     if unknown_sampling:
         raise ValueError(f"Unknown sampling strategies: {unknown_sampling}")
 
+    # On deploie ici les modeles de base en plusieurs variantes
+    # (ex. lightgbm, lightgbm__smote, lightgbm__adasyn, etc.).
     candidates: dict[str, ModelSpec] = {}
     for base_model_name in selected_model_names:
         base_spec = base_specs[base_model_name]

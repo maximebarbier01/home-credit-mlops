@@ -1,3 +1,5 @@
+"""Mesures et graphiques d'association entre les variables et la target."""
+
 from __future__ import annotations
 
 from pathlib import Path

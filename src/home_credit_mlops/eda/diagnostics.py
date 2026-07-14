@@ -1,3 +1,5 @@
+"""Generation des diagnostics EDA et des rapports de qualite sur le dataset prepare."""
+
 from __future__ import annotations
 
 import json

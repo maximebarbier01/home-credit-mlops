@@ -1,3 +1,5 @@
+"""Preprocessing sklearn reutilisable pour tous les modeles du projet."""
+
 from __future__ import annotations
 
 from typing import Sequence
@@ -31,11 +33,15 @@ def build_preprocessor(features: pd.DataFrame) -> tuple[ColumnTransformer, list[
     numeric_columns = features.select_dtypes(include=["number"]).columns.tolist()
     categorical_columns = features.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
 
+    # Les variables numeriques sont seulement imputees ici : les modeles
+    # arbres se chargent ensuite tres bien des echelles heterogenes.
     numeric_pipeline = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
         ]
     )
+    # Les variables categorielle passent par une imputation simple puis
+    # un OneHotEncoder compatible avec les categories jamais vues.
     categorical_pipeline = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="most_frequent")),
@@ -43,6 +49,8 @@ def build_preprocessor(features: pd.DataFrame) -> tuple[ColumnTransformer, list[
         ]
     )
 
+    # Le ColumnTransformer garantit que ce preprocessing est applique
+    # de facon identique en CV, en holdout et lors du refit final.
     preprocessor = ColumnTransformer(
         transformers=[
             ("numeric", numeric_pipeline, numeric_columns),

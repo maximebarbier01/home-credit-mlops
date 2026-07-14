@@ -1,3 +1,5 @@
+"""Point d'entree CLI pour ouvrir l'interface MLflow locale."""
+
 from home_credit_mlops.mlflow_utils import ui_main
 
 

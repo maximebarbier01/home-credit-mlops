@@ -1,3 +1,5 @@
+"""Orchestrateur principal des experiences modele : CV, tuning, seuil metier, MLflow et exports."""
+
 from __future__ import annotations
 
 import argparse
@@ -735,6 +737,8 @@ def _benchmark_single_model(
         random_state=settings.dataset.random_state,
     )
 
+    # Premiere etape : rechercher les meilleurs hyperparametres selon
+    # le score metier sous validation croisee.
     search = GridSearchCV(
         estimator=pipeline,
         param_grid=model_spec.param_grid,
@@ -748,6 +752,8 @@ def _benchmark_single_model(
     )
     search.fit(x_train, y_train)
 
+    # Deuxieme etape : recalculer des probabilites OOF avec le meilleur
+    # estimateur pour optimiser un seuil de decision realiste.
     oof_probabilities = cross_val_predict(
         search.best_estimator_,
         x_train,
@@ -764,6 +770,7 @@ def _benchmark_single_model(
         grid_size=settings.business.threshold_grid_size,
     )
 
+    # Evaluation finale sur le holdout avec le seuil choisi a partir des OOF.
     holdout_probabilities = search.best_estimator_.predict_proba(x_holdout)[:, 1]
     holdout_result = evaluate_threshold(
         np.asarray(y_holdout),
@@ -1038,6 +1045,8 @@ def _run_benchmark_body(
         y_holdout=y_holdout,
     )
 
+    # Une fois le meilleur candidat identifie, on le refit sur toutes
+    # les donnees disponibles avant interpretabilite et eventuel registry.
     final_pipeline = _build_pipeline(best_model_spec, features, settings)
     final_pipeline.set_params(**best_result.best_params)
     final_pipeline.fit(features, target)
@@ -1151,6 +1160,8 @@ def _run_benchmark_body(
         json.dumps(metadata, indent=2),
         encoding="utf-8",
     )
+    # Transformer les sorties de la campagne en classeurs Excel pour
+    # simplifier la comparaison et la relecture des resultats.
     build_experiment_workbooks(destination, cleanup_csv=False)
 
     if enable_mlflow:

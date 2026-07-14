@@ -1,3 +1,5 @@
+"""Helpers de lecture et d'ecriture tabulaire utilises dans le projet."""
+
 from __future__ import annotations
 
 from pathlib import Path

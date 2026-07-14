@@ -1,3 +1,5 @@
+"""Metriques metier et optimisation du seuil de decision a partir des probabilites."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -120,6 +122,8 @@ def find_best_threshold(
     fp_cost: float = 1.0,
     grid_size: int = 401,
 ) -> ThresholdResult:
+    # On teste a la fois une grille reguliere et les probabilites observees
+    # pour ne pas rater un seuil metier pertinent.
     candidate_thresholds = np.unique(np.concatenate([np.linspace(0.0, 1.0, grid_size), y_score]))
 
     best_result: ThresholdResult | None = None

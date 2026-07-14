@@ -1,3 +1,5 @@
+"""Pipeline principal de preparation des donnees Home Credit et de generation du dataset final."""
+
 from __future__ import annotations
 
 import argparse
@@ -669,6 +671,8 @@ def build_home_credit_dataset(
 ) -> dict[str, object]:
     report_dir.mkdir(parents=True, exist_ok=True)
 
+    # Charger les deux tables principales, puis les aligner pour preparer
+    # une seule base client avant les jointures annexes.
     application_train = pd.read_csv(raw_dir / "application_train.csv")
     application_test = pd.read_csv(raw_dir / "application_test.csv")
     application_test = application_test.assign(TARGET=np.nan)
@@ -687,6 +691,8 @@ def build_home_credit_dataset(
     combined_application = clean_application_data(combined_application)
     raw_profiles.append(collect_table_profile(combined_application, "application_combined_cleaned"))
 
+    # Chaque table secondaire est agregee au niveau client afin d'obtenir
+    # une seule ligne par SK_ID_CURR dans le dataset final.
     feature_frames: list[tuple[str, pd.DataFrame]] = []
     aggregation_profiles: list[dict[str, object]] = []
 
@@ -710,12 +716,15 @@ def build_home_credit_dataset(
     feature_frames.append(("credit_card_balance", credit_card_features))
     aggregation_profiles.extend(profiles)
 
+    # Fusion finale des agregats avec la table application nettoyee, puis
+    # suppression des colonnes sans information exploitable.
     merged, merge_coverage = merge_feature_frames(combined_application, feature_frames)
     merged, constant_columns = drop_constant_columns(
         merged, excluded_columns=["TARGET", "SK_ID_CURR"]
     )
     merged = reduce_memory_usage(merged)
 
+    # Re-separer train et test apres la phase de preparation commune.
     train_frame = merged[merged["TARGET"].notna()].copy()
     train_frame["TARGET"] = train_frame["TARGET"].astype(np.int8)
     test_frame = merged[merged["TARGET"].isna()].drop(columns=["TARGET"]).copy()
@@ -726,6 +735,7 @@ def build_home_credit_dataset(
     write_table(train_frame, train_output_path)
     write_table(test_frame, test_output_path)
 
+    # Exporter les rapports de profilage et d'EDA pour documenter la step 1.
     pd.DataFrame(raw_profiles + aggregation_profiles).to_csv(
         report_dir / "table_profiles.csv",
         index=False,
@@ -751,6 +761,8 @@ def build_home_credit_dataset(
         encoding="utf-8",
     )
 
+    # Regrouper toutes les sorties du dossier dans un seul classeur Excel
+    # afin de faciliter la lecture par le mentor ou le reviewer.
     report_workbook_path = report_dir / f"{report_dir.name}.xlsx"
     metadata = {
         "pipeline_steps": [

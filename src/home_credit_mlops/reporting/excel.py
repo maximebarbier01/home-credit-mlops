@@ -1,3 +1,5 @@
+"""Transformation des sorties d'un dossier en classeurs Excel plus lisibles."""
+
 from __future__ import annotations
 
 import json
@@ -121,7 +123,11 @@ def build_workbook_from_directory(
     destination.parent.mkdir(parents=True, exist_ok=True)
     existing_names: set[str] = set()
 
+    # Chaque dossier est converti en classeur pour centraliser tables,
+    # images et metadonnees dans un format simple a partager.
     with pd.ExcelWriter(destination, engine="openpyxl") as writer:
+        # Le manifest sert d'index du classeur : on sait tout de suite
+        # quels fichiers du dossier ont ete emballes dans l'Excel.
         manifest_rows: list[dict[str, str]] = []
         for path in supported_files:
             kind = "image" if path.suffix.lower() in IMAGE_SUFFIXES else "table"
@@ -149,6 +155,8 @@ def build_workbook_from_directory(
             worksheet.freeze_panes = "A2"
             worksheet.auto_filter.ref = worksheet.dimensions
 
+        # Les images sont ajoutees sur des onglets dedies pour conserver
+        # les graphiques utiles sans laisser trainer les PNG separement.
         for path in supported_files:
             if path.suffix.lower() not in IMAGE_SUFFIXES:
                 continue
