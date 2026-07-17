@@ -186,11 +186,13 @@ def _build_sampling_steps(
     raise ValueError(f"Unsupported sampling strategy: {sampling_strategy}")
 
 
-def _build_pipeline(
+def build_model_pipeline(
     model_spec: ModelSpec,
     features: pd.DataFrame,
     settings: Settings,
 ) -> Pipeline | ImbPipeline:
+    """Construit le pipeline modele complet, avec preprocessing et sampling."""
+
     preprocessor, _, _ = build_preprocessor(features)
     model = model_spec.estimator_factory()
     sampling_steps = _build_sampling_steps(model_spec, settings)
@@ -210,6 +212,14 @@ def _build_pipeline(
             ("model", model),
         ]
     )
+
+
+def _build_pipeline(
+    model_spec: ModelSpec,
+    features: pd.DataFrame,
+    settings: Settings,
+) -> Pipeline | ImbPipeline:
+    return build_model_pipeline(model_spec, features, settings)
 
 
 def _sample_training_frame(

@@ -192,6 +192,18 @@ Le nom du modèle et la stratégie de sampling de cette commande constituent un
 exemple de finalisation. Le choix définitif doit reposer sur les résultats CV de
 la campagne de comparaison.
 
+Une fois le champion sélectionné, un enregistrement plus rapide est disponible
+pour créer une nouvelle version MLflow sans relancer toute la recherche
+d'hyperparamètres :
+
+```bash
+poetry run python scripts/register_champion_model.py
+```
+
+Ce script réentraîne uniquement le champion connu (`lightgbm + smote`) sur le
+dataset préparé, applique le seuil métier `0.220331353025222`, puis enregistre
+une version servable dans `home-credit-scoring`.
+
 ## Protocole d'évaluation
 
 1. Un holdout stratifié de 20 % est isolé avant l'entraînement.
