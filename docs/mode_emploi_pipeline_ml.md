@@ -497,6 +497,19 @@ L'option suivante enregistre le meilleur modèle sous un nom stable :
 Chaque nouvel enregistrement crée une version. L'URI
 `models:/home-credit-scoring/3`, par exemple, désigne précisément la version 3.
 
+Après sélection du champion, le script suivant permet de créer une nouvelle
+version servable sans relancer toute la validation croisée :
+
+```bash
+poetry run python scripts/register_champion_model.py
+```
+
+Ce point d'entrée reprend le champion validé (`lightgbm + smote`), ses meilleurs
+hyperparamètres, le seuil métier `0.220331353025222`, puis réentraîne le pipeline
+une seule fois sur le dataset préparé. La version créée dans MLflow contient la
+réponse métier complète : probabilité de défaut, seuil, classe prédite et
+décision de crédit.
+
 ### 12.4 Interface web
 
 ```bash
@@ -582,6 +595,7 @@ par une future API métier.
 |---|---|
 | [`scripts/build_home_credit_dataset.py`](../scripts/build_home_credit_dataset.py) | Lance la préparation et l'EDA |
 | [`scripts/run_home_credit_experiment.py`](../scripts/run_home_credit_experiment.py) | Lance une campagne de benchmark |
+| [`scripts/register_champion_model.py`](../scripts/register_champion_model.py) | Réentraîne et enregistre rapidement le champion MLflow |
 | [`scripts/mlflow_ui.py`](../scripts/mlflow_ui.py) | Lance l'interface MLflow locale |
 
 ### Socle applicatif
