@@ -8,6 +8,7 @@ from home_credit_mlops.modeling.benchmark import _build_pipeline
 from home_credit_mlops.modeling.candidates import (
     VALID_SAMPLING_STRATEGIES,
     build_candidate_model_specs,
+    get_model_specs,
 )
 from home_credit_mlops.settings import load_settings
 
@@ -41,6 +42,22 @@ def test_build_candidate_model_specs_expands_sampling_variants() -> None:
     assert specs["lightgbm"].sampling_strategy == "baseline"
     assert specs["lightgbm__borderline_smote"].base_model_name == "lightgbm"
     assert specs["lightgbm__smote_under"].sampling_strategy == "smote_under"
+
+
+def test_xgboost_is_available_with_safe_parallelism() -> None:
+    spec = get_model_specs()["xgboost"]
+    estimator = spec.estimator_factory()
+
+    assert estimator.__class__.__name__ == "XGBClassifier"
+    assert estimator.n_jobs == 1
+    assert estimator.tree_method == "hist"
+    assert spec.param_grid == [
+        {
+            "model__n_estimators": [300, 500],
+            "model__learning_rate": [0.03, 0.05],
+            "model__max_depth": [4, 6],
+        }
+    ]
 
 
 def test_build_pipeline_uses_expected_sampling_steps() -> None:

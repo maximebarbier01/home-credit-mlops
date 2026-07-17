@@ -8,6 +8,7 @@ from typing import Any, Callable, Sequence
 from lightgbm import LGBMClassifier
 from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from xgboost import XGBClassifier
 
 
 EstimatorFactory = Callable[[], Any]
@@ -99,6 +100,28 @@ def get_model_specs() -> dict[str, ModelSpec]:
                     "model__n_estimators": [300, 500],
                     "model__learning_rate": [0.03, 0.05],
                     "model__num_leaves": [31, 63],
+                }
+            ],
+        ),
+        "xgboost": ModelSpec(
+            name="xgboost",
+            base_model_name="xgboost",
+            estimator_factory=lambda: XGBClassifier(
+                colsample_bytree=0.8,
+                eval_metric="logloss",
+                learning_rate=0.05,
+                n_estimators=400,
+                n_jobs=1,
+                objective="binary:logistic",
+                random_state=42,
+                subsample=0.8,
+                tree_method="hist",
+            ),
+            param_grid=[
+                {
+                    "model__n_estimators": [300, 500],
+                    "model__learning_rate": [0.03, 0.05],
+                    "model__max_depth": [4, 6],
                 }
             ],
         ),
