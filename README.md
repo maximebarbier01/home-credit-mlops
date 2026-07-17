@@ -302,13 +302,17 @@ poetry run mlflow artifacts download \
   --dst-path /tmp/home-credit-serving-demo
 ```
 
-Appel de l'endpoint depuis un second terminal :
+Appel de l'endpoint depuis un second terminal, avec un affichage JSON lisible :
 
 ```bash
-curl -X POST http://127.0.0.1:8000/invocations \
+curl -s -X POST http://127.0.0.1:8000/invocations \
   -H "Content-Type: application/json" \
-  --data @/tmp/home-credit-serving-demo/serving_input_example.json
+  --data @/tmp/home-credit-serving-demo/serving_input_example.json \
+  | python -m json.tool
 ```
+
+Sans `python -m json.tool`, `curl` affiche la réponse brute sur une seule ligne,
+ce qui est normal pour une API REST.
 
 Format de réponse :
 

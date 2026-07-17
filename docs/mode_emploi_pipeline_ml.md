@@ -561,12 +561,17 @@ poetry run mlflow artifacts download \
 ### 13.3 Appel REST
 
 L'appel doit être exécuté dans un second terminal pendant que le serveur reste actif.
+La commande suivante formate la réponse JSON pour une lecture plus simple :
 
 ```bash
-curl -X POST http://127.0.0.1:8000/invocations \
+curl -s -X POST http://127.0.0.1:8000/invocations \
   -H "Content-Type: application/json" \
-  --data @/tmp/home-credit-serving-demo/serving_input_example.json
+  --data @/tmp/home-credit-serving-demo/serving_input_example.json \
+  | python -m json.tool
 ```
+
+Une réponse brute affichée sur une seule ligne avec `curl` est normale. Le
+formatage sert uniquement à faciliter la démonstration et la lecture.
 
 Réponse MLflow :
 
