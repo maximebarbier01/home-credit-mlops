@@ -1,150 +1,279 @@
 # Home Credit MLOps
 
-Base project for the OpenClassrooms "Initiez-vous au MLOps" credit scoring exercise.
+Projet de scoring crédit réalisé dans le cadre du parcours MLOps
+OpenClassrooms.
 
-## Main entrypoints
+L'objectif consiste à estimer la probabilité de défaut d'un demandeur de crédit,
+à convertir cette probabilité en décision métier et à assurer la traçabilité du
+cycle de vie du modèle avec MLflow.
 
-- `scripts/build_home_credit_dataset.py`: data preparation, feature engineering, and final dataset EDA from the raw Home Credit tables
-- `scripts/run_home_credit_experiment.py`: model training, benchmark, threshold optimization, SHAP, Excel exports, and MLflow tracking
-- `scripts/mlflow_ui.py`: start the MLflow UI during the MLOps phase
-- detailed French guide: `docs/mode_emploi_pipeline_ml.md`
+Le projet adopte une approche **script-first** : la préparation des données,
+l'entraînement et l'exploitation MLflow reposent sur des scripts Python
+versionnés plutôt que sur des notebooks.
 
-## Project layout
+## Objectifs métier et ML
+
+- Consolider les tables Home Credit à la granularité d'un client.
+- Nettoyer et enrichir les données sans introduire de fuite de cible.
+- Comparer plusieurs familles de modèles et stratégies de rééquilibrage.
+- Optimiser les hyperparamètres par validation croisée stratifiée.
+- Déterminer un seuil de décision minimisant le coût des erreurs métier.
+- Expliquer les prédictions globalement et localement avec SHAP.
+- Tracer les expériences, versionner le modèle final et tester son serving avec MLflow.
+
+La classe `TARGET = 1` représente un client en défaut. La configuration actuelle
+attribue un coût de `10` à un faux négatif et un coût de `1` à un faux positif.
+Cette hypothèse est centralisée dans [`configs/default.toml`](configs/default.toml)
+et reste modifiable après validation métier.
+
+## Architecture générale
+
+```mermaid
+flowchart LR
+    A["Tables brutes<br/>data/raw"] --> B["Construction et EDA<br/>build_home_credit_dataset.py"]
+    B --> C["Datasets Parquet<br/>data/processed"]
+    C --> D["Preprocessing sklearn<br/>imputation et encodage"]
+    D --> E["Benchmark<br/>modèles et sampling"]
+    E --> F["Validation croisée<br/>et optimisation du seuil"]
+    F --> G["Rapports<br/>Excel, courbes et SHAP"]
+    F --> H["MLflow<br/>tracking et registry"]
+    H --> I["Serving<br/>probabilité et décision métier"]
+```
+
+Le découpage suit un principe simple :
+
+- `scripts/` contient les points d'entrée exécutables ;
+- `src/home_credit_mlops/` contient la logique réutilisable, testable et importable.
+
+## Arborescence
 
 ```text
 home-credit-mlops/
-|-- configs/
+|-- configs/                         # Configuration TOML
 |-- data/
-|   |-- raw/
-|   |-- interim/
-|   `-- processed/
-|-- docs/
-|-- scripts/
+|   |-- raw/                         # Données Kaggle non versionnées
+|   |-- interim/                     # Données intermédiaires
+|   `-- processed/                   # Datasets prêts pour le modèle
+|-- docs/                            # Documentation détaillée
+|-- scripts/                         # Points d'entrée CLI
 |-- src/home_credit_mlops/
-|   |-- data/
-|   |-- eda/
-|   |-- features/
-|   |-- modeling/
-|   `-- reporting/
-`-- tests/
+|   |-- data/                        # Construction du dataset
+|   |-- eda/                         # Diagnostics et visualisations
+|   |-- features/                    # Preprocessing sklearn
+|   |-- modeling/                    # Modèles, métriques, SHAP et serving
+|   `-- reporting/                   # Consolidation des rapports Excel
+|-- tests/                           # Tests automatisés
+|-- mlflow.db                        # Tracking et registry locaux, non versionnés
+|-- mlartifacts/                     # Artefacts MLflow locaux, non versionnés
+`-- reports/                         # Livrables générés, non versionnés
 ```
 
-## Build schema
+Une nomenclature détaillée, fichier par fichier, est disponible dans
+[`docs/mode_emploi_pipeline_ml.md`](docs/mode_emploi_pipeline_ml.md).
 
-The project now follows one main ML path from end to end:
+## Prérequis et installation
 
-1. `data/home_credit.py`
-   prepares, cleans, joins, enriches, and documents the final modeling dataset.
-2. `eda/diagnostics.py`
-   produces the final dataset EDA and data-quality reports during the data-preparation step.
-3. `features/preprocessing.py`
-   defines the preprocessing used by the models.
-4. `modeling/benchmark.py`
-   trains and compares candidate models with cross-validation, evaluates them,
-   optimizes the business decision threshold, exports diagnostics, and optionally logs everything in MLflow.
-4. `modeling/interpretability.py`
-   exports global feature importance and local and global SHAP explanations.
-5. `reporting/excel.py`
-   bundles the experiment outputs into Excel workbooks.
+- WSL 2 avec Ubuntu pour l'environnement de développement actuel ;
+- Python `>=3.11,<3.13` ;
+- Poetry ;
+- fichiers Home Credit placés dans `data/raw/`.
 
-So the pattern stays simple:
-
-- `scripts/` contains a few executable entrypoints
-- `src/home_credit_mlops/` contains the reusable, testable, importable logic
-
-## Important note about the environment
-
-Poetry is installed in WSL on this machine, not in Windows PowerShell.
-Run the project commands from WSL, or through `wsl bash -lc ...`.
-
-The project is configured for Python `>=3.11,<3.13`, which matches the current WSL Python setup.
-
-## Quick start
+Installation des dépendances depuis WSL :
 
 ```bash
 cd /home/maxime/projects/home-credit-mlops
 poetry install
 ```
 
-## Suggested workflow
+Vérification de l'environnement :
 
-1. Put the Kaggle files in `data/raw/`
+```bash
+poetry check
+poetry run python --version
+poetry run pytest -q
+```
 
-2. Build the cleaned, feature-engineered dataset and the full data-preparation EDA package:
+Les dossiers `data/raw/`, `data/processed/`, `reports/`, `mlartifacts/` et la
+base `mlflow.db` sont exclus de Git. Les données Kaggle et les artefacts lourds
+doivent donc être transmis séparément si une reproduction complète est attendue.
+
+## Configuration centrale
+
+Le fichier [`configs/default.toml`](configs/default.toml) centralise notamment :
+
+| Section | Paramètre | Valeur par défaut | Rôle |
+|---|---|---:|---|
+| `dataset` | `test_size` | `0.2` | Part réservée au holdout |
+| `dataset` | `random_state` | `42` | Reproductibilité des découpages |
+| `business` | `fn_cost` | `10.0` | Coût d'un mauvais client prédit bon |
+| `business` | `fp_cost` | `1.0` | Coût d'un bon client prédit mauvais |
+| `business` | `threshold_grid_size` | `401` | Résolution minimale de la recherche de seuil |
+| `training` | `cv_folds` | `5` | Nombre de plis de validation croisée |
+| `training` | `n_jobs` | `1` | Nombre de processus parallèles |
+| `mlflow` | `experiment_name` | `home-credit-scoring` | Nom de l'expérience MLflow |
+
+## Exécution du pipeline
+
+### 1. Construire le dataset et les rapports EDA
 
 ```bash
 poetry run python scripts/build_home_credit_dataset.py
 ```
 
-3. Run the unified experiment pipeline:
+Sorties principales :
+
+- `data/processed/train_features.parquet` ;
+- `data/processed/test_features.parquet` ;
+- `reports/AAAAMMJJ_home_credit_data_prep/` ;
+- `reports/AAAAMMJJ_home_credit_data_prep/AAAAMMJJ_home_credit_data_prep.xlsx`.
+
+### 2. Réaliser un test de développement
 
 ```bash
-poetry run python scripts/run_home_credit_experiment.py --campaign-name dev_lightgbm_5k_cv3 --model lightgbm --sample-size 5000 --cv-folds 3 --n-jobs 1
+poetry run python scripts/run_home_credit_experiment.py \
+  --campaign-name dev_lightgbm_5k_cv3 \
+  --model lightgbm \
+  --sampling baseline \
+  --sample-size 5000 \
+  --cv-folds 3 \
+  --n-jobs 1
 ```
 
-Available base models are `logistic_regression`, `random_forest`, `extra_trees`,
-`lightgbm`, and `xgboost`. For example, compare the two boosting implementations with:
+Cette commande valide rapidement la chaîne complète sur un échantillon. Sous
+WSL, `--n-jobs 1` limite les duplications de mémoire provoquées par la validation
+croisée, le preprocessing et le sur-échantillonnage.
+
+### 3. Comparer plusieurs modèles et stratégies de sampling
 
 ```bash
-poetry run python scripts/run_home_credit_experiment.py --campaign-name boosting_10k_cv3 --model lightgbm --model xgboost --sampling baseline --sample-size 10000 --cv-folds 3 --n-jobs 1
+poetry run python scripts/run_home_credit_experiment.py \
+  --campaign-name benchmark_models_10k_cv3 \
+  --model logistic_regression \
+  --model random_forest \
+  --model extra_trees \
+  --model lightgbm \
+  --model xgboost \
+  --sampling baseline \
+  --sampling smote \
+  --sample-size 10000 \
+  --cv-folds 3 \
+  --n-jobs 1
 ```
 
-To compare imbalance handling strategies, you can benchmark the same base model with several sampling modes such as `baseline`, `smote`, `borderline_smote`, `adasyn`, and `smote_under`:
+Modèles disponibles :
+
+- `logistic_regression` ;
+- `random_forest` ;
+- `extra_trees` ;
+- `lightgbm` ;
+- `xgboost`.
+
+Stratégies de rééquilibrage disponibles :
+
+- `baseline` : aucun rééchantillonnage ;
+- `smote` : sur-échantillonnage SMOTE ;
+- `borderline_smote` : sur-échantillonnage des observations proches de la frontière ;
+- `adasyn` : génération adaptative d'observations minoritaires ;
+- `smote_under` : combinaison SMOTE et sous-échantillonnage aléatoire.
+
+### 4. Enregistrer un modèle final dans le Model Registry
 
 ```bash
-poetry run python scripts/run_home_credit_experiment.py --campaign-name dev_logreg_baseline_smote --model logistic_regression --sampling baseline --sampling smote --sample-size 5000 --cv-folds 3 --n-jobs 1
+poetry run python scripts/run_home_credit_experiment.py \
+  --campaign-name champion_lightgbm_smote_full_cv5 \
+  --model lightgbm \
+  --sampling smote \
+  --cv-folds 5 \
+  --n-jobs 1 \
+  --register-model-name home-credit-scoring
 ```
 
-For WSL / VS Code stability, keep development runs focused on one base model with a sample and `--n-jobs 1`. Reserve full multi-model, multi-sampling, full-dataset benchmarks for the final phase.
+Le nom du modèle et la stratégie de sampling de cette commande constituent un
+exemple de finalisation. Le choix définitif doit reposer sur les résultats CV de
+la campagne de comparaison.
 
-4. Open the MLflow UI when you want to inspect the tracked runs:
+## Protocole d'évaluation
+
+1. Un holdout stratifié de 20 % est isolé avant l'entraînement.
+2. `GridSearchCV` recherche les hyperparamètres avec `StratifiedKFold`.
+3. Des probabilités out-of-fold, dites OOF, sont recalculées sur la partie entraînement.
+4. Le seuil métier est choisi sur ces probabilités OOF.
+5. Les candidats sont classés par coût métier CV, puis par average precision et ROC AUC CV.
+6. Le holdout sert uniquement à estimer la généralisation après sélection.
+7. Le meilleur pipeline est réentraîné sur l'ensemble des données disponibles.
+
+Le coût métier normalisé est défini par :
+
+```text
+coût métier = (10 × FN + 1 × FP) / nombre d'observations
+```
+
+Le seuil n'est donc pas fixé arbitrairement à `0.5`. Il minimise le coût métier
+sur les probabilités OOF, puis sa performance est contrôlée sur le holdout.
+
+Les métriques suivies comprennent le coût métier, ROC AUC, average precision,
+accuracy, balanced accuracy, précision, rappel, F1-score, Brier score, statistique
+de Kolmogorov-Smirnov et matrice de confusion.
+
+## Rapports générés
+
+Chaque campagne crée un dossier :
+
+```text
+reports/AAAAMMJJ_home_credit_experiments/<horodatage>_<campagne>/
+```
+
+Contenu principal :
+
+- `summary.xlsx` : synthèse de la campagne et comparaison des candidats ;
+- `cv_results/` : résultats détaillés des recherches d'hyperparamètres ;
+- `diagnostics/<candidat>/` : courbes ROC, précision-rappel et matrices de confusion ;
+- `predictions/` : probabilités OOF et holdout au format Parquet ;
+- `threshold_optimization/` : courbes et tables coût métier contre seuil ;
+- `interpretability/` : feature importance et analyses SHAP du meilleur modèle ;
+- `decision_threshold.json` : seuil retenu et hypothèses de coût ;
+- `campaign_metadata.json` : paramètres et traçabilité de la campagne.
+
+Les tables et graphiques sont consolidés en classeurs Excel afin de limiter la
+dispersion des fichiers. Les diagnostics sont produits pour chaque candidat ;
+l'interprétabilité détaillée est réservée au modèle sélectionné.
+
+## MLflow
+
+Lancement de l'interface locale :
 
 ```bash
 poetry run python scripts/mlflow_ui.py
 ```
 
-5. If needed, disable tracking for a quick local dry run:
+L'interface est ensuite accessible sur <http://127.0.0.1:5000>.
+
+MLflow assure :
+
+- le tracking des paramètres, métriques, tags et artefacts ;
+- l'organisation d'une campagne en run parent et runs candidats imbriqués ;
+- la journalisation des modèles candidats et du modèle final ;
+- le versionnement du modèle final dans le Model Registry ;
+- le serving local du modèle enregistré.
+
+Un test rapide sans tracking reste possible :
 
 ```bash
-poetry run python scripts/run_home_credit_experiment.py --skip-mlflow --sample-size 3000 --cv-folds 3 --n-jobs 1
+poetry run python scripts/run_home_credit_experiment.py \
+  --model lightgbm \
+  --sample-size 3000 \
+  --cv-folds 3 \
+  --n-jobs 1 \
+  --skip-mlflow
 ```
 
-## What the unified experiment exports
+## Serving de la décision métier
 
-Each run under `reports/YYYYMMDD_home_credit_experiments/<timestamp>_<campaign_name>/` includes:
-
-- a root `summary.xlsx` workbook with cross-model comparison sheets such as `campaign_overview`, `model_performance_summary`, `cv_summary`, `holdout_summary`, `decision_threshold_summary`, and `mlflow_runs`, including the `base_model` and `sampling` comparison columns
-- per-folder Excel workbooks for `interpretability`, `diagnostics`, `predictions`, `cv_results`, and `threshold_optimization`
-- diagnostics exported for each benchmarked candidate, with one subfolder per model or sampling variant
-- interpretability exports kept for the selected best model only
-- OOF and holdout prediction parquet files
-- ROC, PR, and confusion-matrix diagnostics
-- grouped feature importance
-- SHAP global and local explanations
-- campaign-level metadata and MLflow run mapping
-- decision-threshold metadata
-- threshold-optimization tables and plots, including business cost vs threshold
-- packaged reports where CSV exports are converted to Excel tabs and then removed
-
-## What this scaffold already covers
-
-- reusable package structure
-- feature aggregation from the main Home Credit tables
-- cross-validation and hyperparameter search
-- business cost with heavier false-negative penalty
-- threshold optimization on out-of-fold probabilities
-- SHAP-based interpretability exports
-- Excel bundling of experiment artifacts
-- MLflow experiment tracking and local model registry support
-
-## Serve the versioned business decision
-
-The final MLflow model packages the fitted pipeline together with its optimized
-business threshold. Its response contains the default probability, threshold,
-predicted class, and credit decision for every submitted client.
+Le modèle final MLflow encapsule le pipeline entraîné et son seuil métier
+versionné. Démarrage d'une version enregistrée :
 
 ```bash
-MODEL_VERSION=3  # Replace with the newly registered business-model version.
+MODEL_VERSION=3
 
 poetry run mlflow models serve \
   --model-uri "models:/home-credit-scoring/${MODEL_VERSION}" \
@@ -153,7 +282,23 @@ poetry run mlflow models serve \
   --env-manager local
 ```
 
-The standard MLflow response uses a `predictions` envelope:
+Téléchargement de l'exemple d'entrée généré par MLflow :
+
+```bash
+poetry run mlflow artifacts download \
+  --artifact-uri "models:/home-credit-scoring/${MODEL_VERSION}" \
+  --dst-path /tmp/home-credit-serving-demo
+```
+
+Appel de l'endpoint depuis un second terminal :
+
+```bash
+curl -X POST http://127.0.0.1:8000/invocations \
+  -H "Content-Type: application/json" \
+  --data @/tmp/home-credit-serving-demo/serving_input_example.json
+```
+
+Format de réponse :
 
 ```json
 {
@@ -167,3 +312,23 @@ The standard MLflow response uses a `predictions` envelope:
   ]
 }
 ```
+
+La valeur `predicted_default = 1` signifie que la probabilité estimée dépasse le
+seuil métier. La décision associée est alors `refused`. Une valeur `0` produit
+la décision `approved`.
+
+## Qualité et limites
+
+Contrôles disponibles :
+
+```bash
+poetry run ruff check scripts src tests
+poetry run pytest -q
+```
+
+Limites à conserver dans l'analyse :
+
+- le rapport de coût `FN/FP = 10` constitue une hypothèse pédagogique à valider avec le métier ;
+- le tracking et le registry reposent actuellement sur une infrastructure locale ;
+- la surveillance en production, la dérive des données et la CI/CD restent hors du périmètre actuel ;
+- les artefacts locaux et les données brutes ne sont pas stockés dans Git.
