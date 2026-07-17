@@ -16,6 +16,7 @@ from imblearn.over_sampling import ADASYN, BorderlineSMOTE, SMOTE
 from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.under_sampling import RandomUnderSampler
 import mlflow
+import mlflow.pyfunc
 import mlflow.sklearn
 from mlflow.models import infer_signature
 import numpy as np
@@ -53,6 +54,7 @@ from home_credit_mlops.modeling.metrics import (
     evaluate_threshold,
     find_best_threshold,
 )
+from home_credit_mlops.modeling.serving import CreditScoringModel
 from home_credit_mlops.reporting.excel import build_experiment_workbooks, remove_files_by_suffix
 from home_credit_mlops.settings import Settings, load_settings
 
@@ -944,13 +946,23 @@ def _log_final_model(
     if example.empty:
         return None
 
-    signature = infer_signature(example, pipeline.predict_proba(example))
-    mlflow.sklearn.log_model(
-        sk_model=pipeline,
-        artifact_path="final_model",
-        serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
+    business_model = CreditScoringModel(
+        pipeline=pipeline,
+        business_threshold=best_result.threshold,
+    )
+    output_example = business_model.predict(context=None, model_input=example)
+    signature = infer_signature(example, output_example)
+    model_info = mlflow.pyfunc.log_model(
+        name="final_model",
+        python_model=business_model,
         signature=signature,
         input_example=example,
+        metadata={
+            "business_threshold": float(best_result.threshold),
+            "positive_class": 1,
+            "positive_class_meaning": "default",
+            "credit_decision_when_positive": "refused",
+        },
     )
     mlflow.log_dict(
         {
@@ -964,8 +976,7 @@ def _log_final_model(
     if not register_model_name:
         return None
 
-    model_uri = f"runs:/{mlflow.active_run().info.run_id}/final_model"
-    version = register_logged_model(model_uri, register_model_name)
+    version = register_logged_model(model_info.model_uri, register_model_name)
     mlflow.log_param("registered_model_name", register_model_name)
     mlflow.log_param("registered_model_version", version)
     return version

@@ -1,378 +1,693 @@
 # Mode d'emploi du pipeline Home Credit MLOps
 
-## 1. Objectif du projet
+## 1. Finalité du document
 
-Le projet sert a construire un modele de credit scoring pour predire la probabilite de defaut d'un client.
+Ce document décrit le fonctionnement complet du projet, depuis les tables brutes
+Home Credit jusqu'au serving d'une décision de crédit versionnée dans MLflow.
 
-La logique metier est la suivante :
-- un faux negatif coute beaucoup plus cher qu'un faux positif ;
-- on entraine plusieurs modeles ;
-- on compare leurs performances techniques et metier ;
-- on choisit aussi le meilleur seuil de decision, pas seulement le meilleur modele.
+La chaîne répond à quatre objectifs principaux :
 
-Dans la configuration actuelle :
-- cout FN = 10
-- cout FP = 1
+- produire un dataset client propre et enrichi ;
+- comparer des modèles dans un protocole reproductible ;
+- choisir un seuil cohérent avec le coût des erreurs métier ;
+- conserver les expériences, modèles et artefacts dans MLflow.
 
-Ces valeurs sont definies dans [configs/default.toml](/home/maxime/projects/home-credit-mlops/configs/default.toml).
+La classe positive `TARGET = 1` correspond au défaut de paiement. Une décision
+de crédit repose donc sur la probabilité estimée de cette classe.
 
----
+## 2. Vue d'ensemble de la chaîne ML
 
-## 2. Les 3 points d'entree a connaitre
+```mermaid
+flowchart TD
+    A["data/raw<br/>Tables Kaggle"] --> B["data/home_credit.py<br/>Nettoyage, agrégations et jointures"]
+    B --> C["eda/diagnostics.py<br/>Qualité et exploration"]
+    C --> D["data/processed<br/>train_features.parquet et test_features.parquet"]
+    D --> E["features/preprocessing.py<br/>Imputation et encodage"]
+    E --> F["modeling/candidates.py<br/>Modèles et sampling"]
+    F --> G["modeling/benchmark.py<br/>GridSearchCV et probabilités OOF"]
+    G --> H["modeling/metrics.py<br/>Coût métier et seuil optimal"]
+    H --> I["modeling/interpretability.py<br/>Feature importance et SHAP"]
+    H --> J["reporting/excel.py<br/>Rapports consolidés"]
+    H --> K["MLflow<br/>Tracking, registry et serving"]
+```
 
-### 2.1 Construire le dataset
+Deux phases restent volontairement séparées :
 
-Script : [scripts/build_home_credit_dataset.py](/home/maxime/projects/home-credit-mlops/scripts/build_home_credit_dataset.py)
+1. la préparation des données et l'EDA ;
+2. l'entraînement, l'évaluation et l'interprétabilité des modèles.
 
-Commande :
+Cette séparation évite de reconstruire toutes les agrégations à chaque expérience
+de modélisation.
+
+## 3. Points d'entrée exécutables
+
+### 3.1 Construction du dataset
+
+Point d'entrée : [`scripts/build_home_credit_dataset.py`](../scripts/build_home_credit_dataset.py)
 
 ```bash
 poetry run python scripts/build_home_credit_dataset.py
 ```
 
-Ce script lance [src/home_credit_mlops/data/home_credit.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/data/home_credit.py), qui :
-- charge les fichiers bruts dans `data/raw/`
-- nettoie les variables principales
-- cree des variables derivees
-- agrege les tables secondaires
-- fusionne tout avec `SK_ID_CURR`
-- exporte un dataset train et un dataset test
+Le script délègue la logique à
+[`src/home_credit_mlops/data/home_credit.py`](../src/home_credit_mlops/data/home_credit.py).
 
-Sorties principales :
-- `data/processed/train_features.parquet`
-- `data/processed/test_features.parquet`
-- `reports/YYYYMMDD_home_credit_data_prep/`
-- `reports/YYYYMMDD_home_credit_data_prep/YYYYMMDD_home_credit_data_prep.xlsx`
+Responsabilités :
 
----
+- lecture séparée des tables brutes ;
+- contrôles de qualité et nettoyage des anomalies connues ;
+- création de variables métier ;
+- agrégation des tables historiques au niveau `SK_ID_CURR` ;
+- jointure des sources sans multiplication des lignes client ;
+- suppression documentée des colonnes constantes ;
+- export des datasets Parquet ;
+- génération du rapport EDA et du classeur Excel associé.
 
-### 2.2 Lancer une experience ML complete
+### 3.2 Campagne d'entraînement
 
-Script : [scripts/run_home_credit_experiment.py](/home/maxime/projects/home-credit-mlops/scripts/run_home_credit_experiment.py)
-
-Commande type :
+Point d'entrée : [`scripts/run_home_credit_experiment.py`](../scripts/run_home_credit_experiment.py)
 
 ```bash
-poetry run python scripts/run_home_credit_experiment.py --campaign-name dev_lightgbm_5k_cv3 --model lightgbm --sample-size 5000 --cv-folds 3 --n-jobs 1
+poetry run python scripts/run_home_credit_experiment.py \
+  --campaign-name dev_lightgbm_5k_cv3 \
+  --model lightgbm \
+  --sampling baseline \
+  --sample-size 5000 \
+  --cv-folds 3 \
+  --n-jobs 1
 ```
 
-Conseil pratique sous WSL / VS Code :
-- pour le developpement, privilegier un seul modele ;
-- utiliser un `sample-size` ;
-- garder `--n-jobs 1` pour eviter les crashs du terminal ou du serveur WSL.
+Le script délègue la logique à
+[`src/home_credit_mlops/modeling/benchmark.py`](../src/home_credit_mlops/modeling/benchmark.py).
 
-Ce script lance [src/home_credit_mlops/modeling/benchmark.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/modeling/benchmark.py).
+Responsabilités :
 
-C'est le coeur de la phase modelisation, sans relancer l'EDA du dataset.
+- chargement du dataset préparé ;
+- séparation entraînement et holdout ;
+- création des pipelines de preprocessing, sampling et classification ;
+- recherche d'hyperparamètres ;
+- calcul des probabilités OOF ;
+- optimisation du seuil métier ;
+- comparaison des candidats ;
+- diagnostics par candidat ;
+- interprétabilité du meilleur modèle ;
+- tracking MLflow et enregistrement facultatif dans le Model Registry.
 
----
+### 3.3 Interface MLflow
 
-### 2.3 Ouvrir MLflow
-
-Script : [scripts/mlflow_ui.py](/home/maxime/projects/home-credit-mlops/scripts/mlflow_ui.py)
-
-Commande :
+Point d'entrée : [`scripts/mlflow_ui.py`](../scripts/mlflow_ui.py)
 
 ```bash
 poetry run python scripts/mlflow_ui.py
 ```
 
-Cela ouvre l'interface MLflow pour visualiser :
-- les runs
-- les metriques
-- les parametres
-- les artefacts
-- les modeles enregistres
+L'interface locale est accessible sur <http://127.0.0.1:5000> et permet de
+consulter les runs, paramètres, métriques, artefacts et versions enregistrées.
 
----
+## 4. Environnement et configuration
 
-## 3. La chaine de build ML, dans l'ordre
+### 4.1 Environnement Python
 
-### Etape 1. Preparation des donnees
-
-Fichier principal : [src/home_credit_mlops/data/home_credit.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/data/home_credit.py)
-
-Cette couche fait le travail "data engineering / feature engineering tabulaire" :
-- lecture des tables Kaggle
-- nettoyage de certaines anomalies
-- creation de ratios et indicateurs metier
-- aggregation des historiques client
-- fusion finale en un seul dataset modele
-
-Exemples de tables agregees :
-- `bureau.csv`
-- `bureau_balance.csv`
-- `previous_application.csv`
-- `POS_CASH_balance.csv`
-- `installments_payments.csv`
-- `credit_card_balance.csv`
-
-Cette etape produit deja des rapports utiles :
-- distribution de la target
-- missing values
-- profils de tables
-- coverage des jointures
-- un classeur Excel qui regroupe les CSV et JSON du dossier de rapports en onglets
-- les CSV intermediaires sont ensuite supprimes du dossier de rapports
-
----
-
-### Etape 2. Nettoyage / preprocessing modele
-
-Fichier principal : [src/home_credit_mlops/features/preprocessing.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/features/preprocessing.py)
-
-Ici, on passe de "dataset propre" a "dataset modelisable".
-
-Le module :
-- separe `X` et `y`
-- identifie les colonnes numeriques et categorielles
-- applique une imputation mediane sur le numerique
-- applique une imputation par la modalite la plus frequente sur le categoriel
-- applique un one-hot encoding sur le categoriel
-
-Important : ce preprocessing n'est pas fait a la main avant le modele. Il est integre dans un `Pipeline` scikit-learn. Donc il est bien rejoue proprement dans la cross-validation et en inference.
-
----
-
-### Etape 3. EDA et diagnostic
-
-Fichiers principaux :
-- [src/home_credit_mlops/eda/diagnostics.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/eda/diagnostics.py)
-- [src/home_credit_mlops/eda/visualisation.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/eda/visualisation.py)
-
-Cette couche sert a comprendre les donnees et a documenter leur qualite.
-
-Elle exporte notamment :
-- schema des colonnes
-- resumes numeriques et categoriels
-- distribution de la target
-- rapports de valeurs manquantes
-- variables les plus associees a la target
-- modalites associees positivement ou negativement au risque
-
-Cette etape fait partie du script de data preparation et est executee pendant `build_home_credit_dataset.py`.
-
----
-
-### Etape 4. Entrainement et comparaison des modeles
-
-Fichier principal : [src/home_credit_mlops/modeling/benchmark.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/modeling/benchmark.py)
-
-C'est la brique centrale du projet.
-
-Elle fait :
-- chargement du dataset prepare
-- eventuel sous-echantillonnage pour aller plus vite
-- split train / holdout
-- creation du pipeline preprocessing + modele
-- `GridSearchCV`
-- cross-validation stratifiee
-- warning explicite si on demande un benchmark complet potentiellement trop lourd pour WSL / VS Code
-- comparaison de plusieurs modeles
-- calcul des probabilites OOF
-- recherche du meilleur seuil metier
-- evaluation finale sur holdout
-- selection du meilleur modele
-- refit final sur l'ensemble des donnees
-
-Les modeles candidats sont definis dans [src/home_credit_mlops/modeling/candidates.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/modeling/candidates.py).
-
-Modeles disponibles actuellement :
-- `logistic_regression`
-- `random_forest`
-- `extra_trees`
-- `lightgbm`
-
----
-
-### Etape 5. Evaluation des performances
-
-Fichier principal : [src/home_credit_mlops/modeling/metrics.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/modeling/metrics.py)
-
-Le projet ne se limite pas a l'AUC.
-
-Metriques suivies :
-- business cost
-- business score
-- ROC AUC
-- average precision
-- accuracy
-- balanced accuracy
-- precision
-- recall
-- F1
-- Brier score
-- KS statistic
-- matrice de confusion
-
-La logique importante est la suivante :
-- pendant la CV, on optimise d'abord le score metier ;
-- puis on cherche le meilleur seuil sur les probabilites OOF ;
-- ensuite on evalue ce seuil sur le holdout.
-
-C'est exactement ce que demande la consigne metier.
-
----
-
-### Etape 6. Choix du seuil de decision
-
-Toujours dans [src/home_credit_mlops/modeling/metrics.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/modeling/metrics.py).
-
-Le seuil n'est pas fixe a `0.5`.
-
-Le projet :
-- balaie une grille de seuils
-- calcule le cout metier pour chaque seuil
-- garde celui qui minimise le cout
-- departage a cout egal avec le meilleur recall
-
-Le seuil retenu est exporte dans :
-- `decision_threshold.json`
-
----
-
-### Etape 7. Interpretabilite
-
-Fichier principal : [src/home_credit_mlops/modeling/interpretability.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/modeling/interpretability.py)
-
-Cette couche sert a expliquer le modele.
-
-Elle produit :
-- feature importance globale
-- feature importance groupee par variable source
-- SHAP global
-- SHAP local sur quelques clients a risque et quelques clients peu risqu?s
-
-C'est la partie utile pour la transparence vis-a-vis d'un charge d'etudes.
-
----
-
-### Etape 8. Packaging des resultats
-
-Fichier principal : [src/home_credit_mlops/reporting/excel.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/reporting/excel.py)
-
-Le pipeline regroupe automatiquement les sorties en classeurs Excel :
-- un classeur resume a la racine du run
-- un classeur par dossier de sortie (`diagnostics`, `interpretability`, `predictions`, `cv_results`, etc.)
-
-Cela evite d'avoir trop de fichiers isoles a ouvrir un par un.
-
----
-
-### Etape 9. Tracking MLOps avec MLflow
-
-Fichier principal : [src/home_credit_mlops/mlflow_utils.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/mlflow_utils.py)
-
-Quand tu lances `run_home_credit_experiment.py`, MLflow peut :
-- creer ou reutiliser l'experiment
-- tracer les parametres
-- tracer les metriques
-- stocker les artefacts
-- logger les modeles candidats
-- logger le modele final
-- enregistrer le meilleur modele dans le registry
-
-Tu peux desactiver le tracking pour aller vite avec :
+Le projet cible Python `>=3.11,<3.13`. Poetry crée l'environnement virtuel,
+installe les dépendances et garantit la cohérence avec `poetry.lock`.
 
 ```bash
-poetry run python scripts/run_home_credit_experiment.py --skip-mlflow
+cd /home/maxime/projects/home-credit-mlops
+poetry install
+poetry run python --version
 ```
 
----
+L'exécution doit avoir lieu dans WSL, car l'installation Poetry actuelle se
+trouve dans Ubuntu et non dans PowerShell Windows.
 
-## 4. Lecture pratique de l'arborescence
+### 4.2 Configuration TOML
 
-### `scripts/`
-Ce sont les points d'entree executables.
+Le fichier [`configs/default.toml`](../configs/default.toml) constitue la source
+de vérité pour les chemins et paramètres transverses.
 
-### `src/home_credit_mlops/data/`
-Preparation des donnees et construction du dataset final.
+```toml
+[dataset]
+test_size = 0.2
+random_state = 42
 
-### `src/home_credit_mlops/features/`
-Preprocessing reutilisable par les modeles.
+[business]
+fn_cost = 10.0
+fp_cost = 1.0
+threshold_grid_size = 401
 
-### `src/home_credit_mlops/eda/`
-Rapports et visualisations EDA.
+[training]
+cv_folds = 5
+n_jobs = 1
+```
 
-### `src/home_credit_mlops/modeling/`
-Modeles, benchmark, metriques et interpretabilite.
+Le coût élevé du faux négatif traduit le risque d'accorder un crédit à un client
+qui fera défaut. Le faux positif correspond au refus d'un bon client et représente
+principalement un manque à gagner.
 
-### `src/home_credit_mlops/reporting/`
-Exports finaux, notamment Excel.
+## 5. Phase 1 : préparation et enrichissement des données
 
-### `configs/`
-Configuration centrale du projet.
+### 5.1 Sources brutes
 
----
+Les principales sources attendues dans `data/raw/` sont :
 
-## 5. Workflow recommande au quotidien
+- `application_train.csv` : demandes connues avec la cible ;
+- `application_test.csv` : demandes sans cible ;
+- `bureau.csv` : crédits déclarés par d'autres institutions ;
+- `bureau_balance.csv` : historique mensuel des crédits du bureau ;
+- `previous_application.csv` : demandes précédentes auprès de Home Credit ;
+- `POS_CASH_balance.csv` : historique des crédits POS et cash ;
+- `installments_payments.csv` : échéances et paiements ;
+- `credit_card_balance.csv` : historique des cartes de crédit.
 
-### Cas 1. Tu modifies la preparation des donnees
-1. Tu modifies `data/home_credit.py`
-2. Tu rebuilds le dataset
-3. Tu relances une experience ML
-4. Tu compares les resultats avec MLflow
+Les fichiers bruts ne sont pas versionnés dans Git en raison de leur volume et
+des conditions de diffusion du jeu de données.
 
-### Cas 2. Tu modifies un modele ou ses hyperparametres
-1. Tu modifies `modeling/candidates.py`
-2. Tu relances `run_home_credit_experiment.py`
-3. Tu regardes d abord `summary.xlsx` pour comparer toute la campagne, puis les classeurs de sous-dossiers et MLflow pour creuser
+### 5.2 Granularité et clés de jointure
 
-### Cas 3. Tu veux aller vite
-Utilise par exemple :
+Le dataset final doit contenir une ligne par demandeur identifié par `SK_ID_CURR`.
+Les tables secondaires possèdent plusieurs lignes par client et ne peuvent donc
+pas être jointes directement à la table principale.
+
+Le traitement suit l'ordre suivant :
+
+1. nettoyage de la table secondaire ;
+2. création d'indicateurs pertinents ;
+3. agrégation au niveau client ;
+4. jointure gauche sur `SK_ID_CURR` ;
+5. contrôle du nombre de lignes et du taux de couverture.
+
+Le **taux de couverture** mesure la part des clients de la table principale ayant
+au moins une correspondance dans une source secondaire. Un faible taux n'indique
+pas nécessairement une erreur : certains clients ne possèdent simplement aucun
+historique dans la source concernée.
+
+### 5.3 Nettoyage et feature engineering
+
+[`src/home_credit_mlops/data/home_credit.py`](../src/home_credit_mlops/data/home_credit.py)
+centralise :
+
+- le remplacement des valeurs sentinelles ou anomalies identifiées ;
+- la création de ratios financiers et temporels ;
+- les indicateurs d'existence d'un historique ;
+- les agrégations numériques telles que moyenne, minimum, maximum et somme ;
+- les agrégations de variables catégorielles encodées ;
+- le contrôle des doublons et des colonnes constantes ;
+- la traçabilité des jointures et des dimensions de tables.
+
+Les valeurs manquantes ne sont pas supprimées massivement à ce stade. Leur
+signification et leur distribution sont documentées, puis leur imputation est
+réalisée dans le pipeline de preprocessing afin d'éviter toute fuite entre plis.
+
+### 5.4 EDA et qualité des données
+
+Modules concernés :
+
+- [`src/home_credit_mlops/eda/diagnostics.py`](../src/home_credit_mlops/eda/diagnostics.py) ;
+- [`src/home_credit_mlops/eda/visualisation.py`](../src/home_credit_mlops/eda/visualisation.py).
+
+Les rapports comprennent notamment :
+
+- dimensions et types des colonnes ;
+- résumés numériques et catégoriels ;
+- doublons et colonnes constantes ;
+- taux de valeurs manquantes ;
+- distribution de `TARGET` ;
+- associations entre variables et cible ;
+- modalités associées positivement ou négativement au risque ;
+- graphiques Missingno et visualisations de synthèse.
+
+Sorties :
+
+```text
+data/processed/train_features.parquet
+data/processed/test_features.parquet
+reports/AAAAMMJJ_home_credit_data_prep/
+`-- AAAAMMJJ_home_credit_data_prep.xlsx
+```
+
+## 6. Phase 2 : preprocessing sans fuite de données
+
+Module :
+[`src/home_credit_mlops/features/preprocessing.py`](../src/home_credit_mlops/features/preprocessing.py)
+
+Le module sépare `X` et `y`, identifie les colonnes par type et construit un
+`ColumnTransformer` scikit-learn.
+
+Traitement numérique :
+
+- imputation par la médiane ;
+- conservation de l'échelle d'origine.
+
+Traitement catégoriel :
+
+- imputation par la modalité la plus fréquente ;
+- encodage One-Hot ;
+- tolérance des catégories inconnues avec `handle_unknown="ignore"`.
+
+Le préprocesseur est inclus dans le pipeline du modèle. Chaque pli de validation
+croisée ajuste donc ses imputations et catégories uniquement sur son propre jeu
+d'entraînement. Ce mécanisme évite une fuite provenant d'un preprocessing ajusté
+avant la validation croisée.
+
+## 7. Phase 3 : modèles candidats et déséquilibre
+
+Module :
+[`src/home_credit_mlops/modeling/candidates.py`](../src/home_credit_mlops/modeling/candidates.py)
+
+### 7.1 Modèles disponibles
+
+| Identifiant CLI | Famille | Particularité |
+|---|---|---|
+| `logistic_regression` | Modèle linéaire | Baseline interprétable, classes pondérées |
+| `random_forest` | Bagging d'arbres | Non-linéarités et interactions |
+| `extra_trees` | Arbres fortement randomisés | Diversité accrue des arbres |
+| `lightgbm` | Gradient boosting | Efficace sur données tabulaires |
+| `xgboost` | Gradient boosting | Alternative de boosting régularisée |
+
+Chaque spécification contient une fabrique d'estimateur et une grille
+d'hyperparamètres compatible avec `GridSearchCV`.
+
+### 7.2 Stratégies de rééquilibrage
+
+| Identifiant CLI | Traitement |
+|---|---|
+| `baseline` | Aucun rééchantillonnage |
+| `smote` | Sur-échantillonnage synthétique de la classe minoritaire |
+| `borderline_smote` | SMOTE concentré près de la frontière de décision |
+| `adasyn` | Génération adaptative dans les zones difficiles |
+| `smote_under` | SMOTE suivi d'un sous-échantillonnage de la classe majoritaire |
+
+Les samplers sont intégrés dans un `imblearn.Pipeline`, après le preprocessing et
+avant le modèle. Le rééchantillonnage s'exécute donc uniquement sur les données
+d'entraînement de chaque pli. Le holdout n'est jamais rééchantillonné.
+
+Le suffixe du candidat rend la stratégie explicite, par exemple
+`lightgbm__smote` ou `xgboost__adasyn`.
+
+## 8. Phase 4 : entraînement et sélection
+
+Module central :
+[`src/home_credit_mlops/modeling/benchmark.py`](../src/home_credit_mlops/modeling/benchmark.py)
+
+### 8.1 Découpage initial
+
+Un split stratifié isole 20 % des observations dans un holdout. La stratification
+conserve la proportion de défauts dans les deux ensembles.
+
+Rôle des ensembles :
+
+- **train** : recherche d'hyperparamètres, validation croisée et seuil OOF ;
+- **holdout** : contrôle final de la généralisation ;
+- **test Kaggle** : prédictions finales sans évaluation, car `TARGET` est absent.
+
+### 8.2 Recherche d'hyperparamètres
+
+`GridSearchCV` utilise `StratifiedKFold`, avec mélange des observations et graine
+fixe. Le nombre de plis par défaut est `5`.
+
+Le scorer principal maximise l'opposé du coût métier. Les meilleurs
+hyperparamètres de chaque candidat sont donc choisis selon l'objectif métier,
+et non uniquement selon l'AUC ou l'accuracy.
+
+### 8.3 Probabilités OOF
+
+Après la recherche, `cross_val_predict(..., method="predict_proba")` produit une
+probabilité out-of-fold pour chaque observation d'entraînement.
+
+Une probabilité OOF est calculée par un modèle qui n'a pas vu l'observation
+concernée pendant son ajustement. Elle fournit ainsi une base plus réaliste pour
+optimiser le seuil qu'une probabilité calculée sur les données d'entraînement du
+modèle final.
+
+### 8.4 Choix du meilleur candidat
+
+Les candidats sont triés selon :
+
+1. le coût métier CV croissant ;
+2. l'average precision CV décroissante ;
+3. la ROC AUC CV décroissante.
+
+Le holdout ne participe pas à ce classement. Il conserve son rôle d'estimation
+finale de la performance hors échantillon.
+
+### 8.5 Refit final
+
+Après sélection, le pipeline du meilleur candidat est reconstruit avec ses
+hyperparamètres et réentraîné sur l'ensemble des données disponibles. Ce pipeline
+sert ensuite aux explications SHAP, aux prédictions Kaggle et à l'enregistrement
+MLflow.
+
+## 9. Phase 5 : métriques et seuil métier
+
+Module :
+[`src/home_credit_mlops/modeling/metrics.py`](../src/home_credit_mlops/modeling/metrics.py)
+
+### 9.1 Fonction de coût
+
+La configuration pédagogique retient :
+
+```text
+coût brut = 10 × FN + 1 × FP
+coût normalisé = coût brut / nombre d'observations
+score métier = - coût normalisé
+```
+
+Interprétation :
+
+- `FN` : défaut réel prédit non-défaillant, donc crédit accordé à tort ;
+- `FP` : client solvable prédit défaillant, donc crédit refusé à tort.
+
+La minimisation du coût favorise le rappel de la classe défaillante. Une baisse
+de précision peut constituer un compromis attendu lorsque le coût des faux
+négatifs est nettement supérieur à celui des faux positifs.
+
+### 9.2 Recherche du seuil
+
+Le seuil par défaut de `0.5` n'est pas imposé. La recherche évalue :
+
+- une grille régulière entre `0` et `1` ;
+- toutes les probabilités observées ;
+- le coût métier de chaque seuil ;
+- le rappel comme critère de départage en cas de coût identique.
+
+Le seuil minimisant le coût OOF est ensuite appliqué sans modification au holdout.
+La courbe coût métier contre seuil justifie visuellement la décision.
+
+### 9.3 Métriques complémentaires
+
+- `ROC AUC` : capacité générale de classement ;
+- `average precision` : qualité du classement de la classe minoritaire ;
+- `precision` : part des défauts réels parmi les défauts prédits ;
+- `recall` : part des défauts effectivement détectés ;
+- `F1` : compromis harmonique entre précision et rappel ;
+- `balanced accuracy` : moyenne des rappels par classe ;
+- `Brier score` : qualité des probabilités ;
+- `KS statistic` : séparation maximale entre distributions de scores ;
+- matrice de confusion : volumes de TN, FP, FN et TP.
+
+L'accuracy reste disponible à titre de contrôle, mais son interprétation est
+limitée par le fort déséquilibre des classes.
+
+## 10. Phase 6 : interprétabilité
+
+Module :
+[`src/home_credit_mlops/modeling/interpretability.py`](../src/home_credit_mlops/modeling/interpretability.py)
+
+Les explications détaillées concernent uniquement le meilleur candidat afin de
+limiter le temps de calcul et le volume des rapports.
+
+Sorties principales :
+
+- importance native ou coefficients du modèle ;
+- importance regroupée par variable source après One-Hot Encoding ;
+- SHAP summary plot global ;
+- SHAP bar plot global ;
+- SHAP waterfall local pour plusieurs clients ;
+- tables de valeurs SHAP consolidées dans `interpretability.xlsx`.
+
+L'analyse globale identifie les variables les plus influentes dans l'ensemble de
+la population. L'analyse locale explique pourquoi une probabilité élevée ou
+faible a été attribuée à un client particulier.
+
+## 11. Phase 7 : reporting
+
+Module :
+[`src/home_credit_mlops/reporting/excel.py`](../src/home_credit_mlops/reporting/excel.py)
+
+Les fichiers CSV, Parquet, JSON et images d'un dossier sont transformés en
+onglets d'un classeur Excel. Un onglet `manifest` recense les éléments intégrés.
+Les CSV intermédiaires du rapport sont supprimés après consolidation.
+
+### 11.1 Classeur principal
+
+`summary.xlsx` contient notamment :
+
+- `campaign_overview` : paramètres généraux et contexte du run ;
+- `model_performance_summary` : comparaison synthétique des candidats ;
+- `cv_summary` : résultats de validation croisée et OOF ;
+- `holdout_summary` : évaluation finale hors échantillon ;
+- `decision_threshold_summary` : seuil et coût métier ;
+- `best_model_summary` : synthèse du candidat retenu ;
+- `mlflow_runs` : correspondance entre candidats et identifiants MLflow.
+
+### 11.2 Sous-dossiers
+
+```text
+reports/AAAAMMJJ_home_credit_experiments/<horodatage>_<campagne>/
+|-- summary.xlsx
+|-- campaign_metadata.json
+|-- decision_threshold.json
+|-- cv_results/
+|-- diagnostics/
+|   |-- logistic_regression/
+|   |-- lightgbm__smote/
+|   `-- ...
+|-- predictions/
+|-- threshold_optimization/
+`-- interpretability/
+```
+
+Les diagnostics ROC, précision-rappel et matrice de confusion sont générés pour
+chaque candidat. Les feature importances et SHAP sont générés pour le meilleur
+modèle uniquement.
+
+## 12. Phase 8 : MLflow
+
+Module :
+[`src/home_credit_mlops/mlflow_utils.py`](../src/home_credit_mlops/mlflow_utils.py)
+
+### 12.1 Tracking des expériences
+
+Une campagne correspond à un run parent. Chaque combinaison modèle et sampling
+correspond à un run enfant.
+
+Éléments journalisés :
+
+- paramètres de campagne et hyperparamètres ;
+- métriques CV, OOF et holdout ;
+- seuil métier et matrice de confusion ;
+- tables de prédictions ;
+- courbes de diagnostic et rapports Excel ;
+- modèle candidat ;
+- meilleur modèle final.
+
+Des tags tels que la campagne, le dataset, l'étape et la politique de décision
+facilitent la comparaison dans l'interface.
+
+### 12.2 Rôle des stockages locaux
+
+| Emplacement | Contenu |
+|---|---|
+| `mlflow.db` | Expériences, runs, paramètres, métriques, tags et métadonnées du registry |
+| `mlartifacts/` | Artefacts rattachés aux runs : modèles, graphiques, rapports et prédictions |
+| `mlartifacts/models/` | Artefacts des logged models gérés par les versions récentes de MLflow |
+
+Le Model Registry n'est donc pas un second dossier de modèles indépendant. Ses
+métadonnées et versions se trouvent dans `mlflow.db`, tandis que les fichiers
+physiques restent dans `mlartifacts/`.
+
+### 12.3 Model Registry
+
+L'option suivante enregistre le meilleur modèle sous un nom stable :
 
 ```bash
-poetry run python scripts/run_home_credit_experiment.py --model lightgbm --sample-size 3000 --cv-folds 3 --skip-mlflow
+--register-model-name home-credit-scoring
 ```
 
-### Cas 4. Tu veux une run complete pour livrable
-Utilise plutot :
+Chaque nouvel enregistrement crée une version. L'URI
+`models:/home-credit-scoring/3`, par exemple, désigne précisément la version 3.
+
+### 12.4 Interface web
 
 ```bash
-poetry run python scripts/run_home_credit_experiment.py --model lightgbm --cv-folds 5 --register-model-name home-credit-scoring
+poetry run python scripts/mlflow_ui.py
 ```
 
----
+La page <http://127.0.0.1:5000> permet de comparer les runs, consulter les
+artefacts et retrouver les versions enregistrées.
 
-## 6. Les fichiers de sortie a connaitre absolument
+## 13. Phase 9 : serving de la décision métier
 
-### Dataset
-- `data/processed/train_features.parquet`
-- `data/processed/test_features.parquet`
+Module :
+[`src/home_credit_mlops/modeling/serving.py`](../src/home_credit_mlops/modeling/serving.py)
 
-### Step 1 data prep
-- `reports/YYYYMMDD_home_credit_data_prep/dataset_metadata.json`
-- `reports/YYYYMMDD_home_credit_data_prep/constant_columns_removed.json`
-- `reports/YYYYMMDD_home_credit_data_prep/eda_metadata.json`
-- `reports/YYYYMMDD_home_credit_data_prep/YYYYMMDD_home_credit_data_prep.xlsx`
-- images de diagnostic de missing values, target et associations avec la target
+`CreditScoringModel` encapsule :
 
-### Experiment ML
-Dans `reports/YYYYMMDD_home_credit_experiments/<timestamp>_<campaign_name>/` :
-- `campaign_metadata.json`
-- `decision_threshold.json`
-- `summary.xlsx`
-- des onglets de synthese comme `campaign_overview`, `model_performance_summary`, `cv_summary`, `holdout_summary`, `decision_threshold_summary` et `mlflow_runs`
-- dossiers `diagnostics/`, `interpretability/`, `predictions/`, `cv_results/`, `threshold_optimization/`
-- un classeur Excel dans chacun de ces dossiers
-- des courbes d'optimisation du seuil, dont le cout metier vs seuil pour justifier la decision finale
-- fichiers parquet pour les predictions et les sorties conservees
+- le pipeline entraîné ;
+- le seuil métier sélectionné ;
+- la conversion de la probabilité en classe ;
+- la conversion de la classe en décision de crédit.
 
----
+Le seuil fait ainsi partie de la version du modèle. Le serveur ne revient pas au
+seuil scikit-learn implicite de `0.5`.
 
-## 7. Comment raconter le projet a l'oral
+### 13.1 Démarrage du serveur
 
-Tu peux le presenter comme ca :
+```bash
+MODEL_VERSION=3
 
-> J'ai structure le projet autour d'une seule chaine ML claire. D'abord je construis un dataset client consolide a partir des tables brutes. Ensuite j'applique un preprocessing integre au pipeline modele. Puis je compare plusieurs algorithmes avec cross-validation et une metrique metier qui penalise davantage les faux negatifs. Je n'utilise pas un seuil fixe a 0.5 : j'optimise le seuil de decision sur les probabilites OOF. Enfin, j'exporte a la fois des diagnostics de performance, des explications globales et locales avec SHAP, et je trace les experimentations avec MLflow.
+poetry run mlflow models serve \
+  --model-uri "models:/home-credit-scoring/${MODEL_VERSION}" \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --env-manager local
+```
 
----
+### 13.2 Préparation d'une requête
 
-## 8. Le point le plus important a retenir
+Le fichier `serving_input_example.json` est généré automatiquement par MLflow à
+partir de cinq lignes de features passées à `input_example` lors du logging.
+Il respecte le schéma attendu par l'endpoint `/invocations`.
 
-Le coeur du projet, c'est ce trio :
-- [src/home_credit_mlops/data/home_credit.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/data/home_credit.py)
-- [src/home_credit_mlops/features/preprocessing.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/features/preprocessing.py)
-- [src/home_credit_mlops/modeling/benchmark.py](/home/maxime/projects/home-credit-mlops/src/home_credit_mlops/modeling/benchmark.py)
+```bash
+poetry run mlflow artifacts download \
+  --artifact-uri "models:/home-credit-scoring/${MODEL_VERSION}" \
+  --dst-path /tmp/home-credit-serving-demo
+```
 
-Si tu comprends bien comment ces trois fichiers s'enchainent, tu comprends l'architecture du projet.
+### 13.3 Appel REST
+
+L'appel doit être exécuté dans un second terminal pendant que le serveur reste actif.
+
+```bash
+curl -X POST http://127.0.0.1:8000/invocations \
+  -H "Content-Type: application/json" \
+  --data @/tmp/home-credit-serving-demo/serving_input_example.json
+```
+
+Réponse MLflow :
+
+```json
+{
+  "predictions": [
+    {
+      "default_probability": 0.37,
+      "business_threshold": 0.2203,
+      "predicted_default": 1,
+      "credit_decision": "refused"
+    }
+  ]
+}
+```
+
+Le tableau `predictions` contient une réponse par ligne d'entrée. Les champs
+`refused` et `approved` fournissent une représentation directement exploitable
+par une future API métier.
+
+## 14. Nomenclature fichier par fichier
+
+### Points d'entrée
+
+| Fichier | Rôle |
+|---|---|
+| [`scripts/build_home_credit_dataset.py`](../scripts/build_home_credit_dataset.py) | Lance la préparation et l'EDA |
+| [`scripts/run_home_credit_experiment.py`](../scripts/run_home_credit_experiment.py) | Lance une campagne de benchmark |
+| [`scripts/mlflow_ui.py`](../scripts/mlflow_ui.py) | Lance l'interface MLflow locale |
+
+### Socle applicatif
+
+| Fichier | Rôle |
+|---|---|
+| [`src/home_credit_mlops/settings.py`](../src/home_credit_mlops/settings.py) | Charge et type la configuration TOML |
+| [`src/home_credit_mlops/logging_utils.py`](../src/home_credit_mlops/logging_utils.py) | Configure les logs Python |
+| [`src/home_credit_mlops/mlflow_utils.py`](../src/home_credit_mlops/mlflow_utils.py) | Configure MLflow, le registry et l'UI |
+
+### Données et EDA
+
+| Fichier | Rôle |
+|---|---|
+| [`src/home_credit_mlops/data/io.py`](../src/home_credit_mlops/data/io.py) | Centralise les lectures et écritures tabulaires |
+| [`src/home_credit_mlops/data/home_credit.py`](../src/home_credit_mlops/data/home_credit.py) | Nettoie, agrège, joint et exporte le dataset |
+| [`src/home_credit_mlops/eda/diagnostics.py`](../src/home_credit_mlops/eda/diagnostics.py) | Produit les audits de qualité et rapports EDA |
+| [`src/home_credit_mlops/eda/visualisation.py`](../src/home_credit_mlops/eda/visualisation.py) | Produit les graphiques et associations avec la cible |
+
+### Modélisation
+
+| Fichier | Rôle |
+|---|---|
+| [`src/home_credit_mlops/features/preprocessing.py`](../src/home_credit_mlops/features/preprocessing.py) | Construit le `ColumnTransformer` |
+| [`src/home_credit_mlops/modeling/candidates.py`](../src/home_credit_mlops/modeling/candidates.py) | Définit modèles, grilles et sampling |
+| [`src/home_credit_mlops/modeling/metrics.py`](../src/home_credit_mlops/modeling/metrics.py) | Calcule les métriques et optimise le seuil |
+| [`src/home_credit_mlops/modeling/benchmark.py`](../src/home_credit_mlops/modeling/benchmark.py) | Orchestre entraînement, sélection et exports |
+| [`src/home_credit_mlops/modeling/interpretability.py`](../src/home_credit_mlops/modeling/interpretability.py) | Produit feature importance et SHAP |
+| [`src/home_credit_mlops/modeling/serving.py`](../src/home_credit_mlops/modeling/serving.py) | Retourne probabilité, seuil et décision métier |
+| [`src/home_credit_mlops/reporting/excel.py`](../src/home_credit_mlops/reporting/excel.py) | Regroupe les artefacts en classeurs Excel |
+
+### Tests
+
+Le dossier `tests/` couvre notamment les métriques métier, la recherche de seuil,
+les stratégies de sampling, les rapports, le workflow de benchmark et la réponse
+du modèle de serving.
+
+```bash
+poetry run ruff check scripts src tests
+poetry run pytest -q
+```
+
+## 15. Scénarios d'utilisation
+
+### Modification de la préparation des données
+
+1. Adapter `src/home_credit_mlops/data/home_credit.py`.
+2. Reconstruire les datasets avec `build_home_credit_dataset.py`.
+3. Contrôler le classeur `home_credit_data_prep.xlsx`.
+4. Relancer une campagne de modèles sur un échantillon.
+5. Comparer la nouvelle campagne à la référence dans MLflow.
+
+### Modification d'un modèle ou de sa grille
+
+1. Adapter `src/home_credit_mlops/modeling/candidates.py`.
+2. Lancer une campagne courte sur échantillon et trois plis.
+3. Contrôler `summary.xlsx` et les diagnostics.
+4. Lancer une campagne complète uniquement après validation du test court.
+
+### Exécution rapide sans MLflow
+
+```bash
+poetry run python scripts/run_home_credit_experiment.py \
+  --model lightgbm \
+  --sample-size 3000 \
+  --cv-folds 3 \
+  --n-jobs 1 \
+  --skip-mlflow
+```
+
+### Campagne finale avec enregistrement
+
+```bash
+poetry run python scripts/run_home_credit_experiment.py \
+  --campaign-name champion_final_full_cv5 \
+  --model lightgbm \
+  --sampling smote \
+  --cv-folds 5 \
+  --n-jobs 1 \
+  --register-model-name home-credit-scoring
+```
+
+Le recours à `--n-jobs 1` est recommandé pour les campagnes lourdes sous WSL.
+Les processus parallèles dupliquent les matrices transformées et les jeux
+sur-échantillonnés, ce qui peut saturer la mémoire malgré un nombre élevé de CPU.
+
+## 16. Trame de présentation du pipeline
+
+Une présentation synthétique peut suivre cette narration :
+
+> Le projet commence par consolider les tables Home Credit à la granularité du
+> client. Le nettoyage, le feature engineering et l'EDA produisent ensuite deux
+> datasets Parquet reproductibles. Le preprocessing est intégré aux pipelines
+> afin d'éviter les fuites pendant la validation croisée. Plusieurs modèles et
+> stratégies de rééquilibrage sont comparés selon un coût métier qui pénalise dix
+> fois plus les faux négatifs. Le seuil de décision est optimisé sur des
+> probabilités OOF, puis contrôlé sur un holdout indépendant. Le meilleur modèle
+> reçoit enfin des explications globales et locales avec SHAP. MLflow conserve
+> les paramètres, métriques, artefacts et versions, puis expose une réponse
+> contenant la probabilité de défaut, le seuil versionné et la décision de crédit.
+
+## 17. Points de vigilance
+
+- Le rapport `FN/FP = 10` reste une hypothèse pédagogique à faire valider par le métier.
+- Le holdout doit rester absent de la sélection des modèles et des seuils.
+- Le sampling doit rester à l'intérieur de la validation croisée.
+- Les résultats supérieurs aux références Kaggle doivent déclencher un audit de fuite de données.
+- Le tracking local n'apporte ni haute disponibilité ni collaboration distante.
+- La surveillance de dérive, la CI/CD et le déploiement cloud constituent des prolongements possibles.
