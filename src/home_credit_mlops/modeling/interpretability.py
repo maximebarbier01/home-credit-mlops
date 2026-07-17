@@ -147,7 +147,8 @@ def export_feature_importance(
 
 
 def _build_shap_explainer(model, background_frame: pd.DataFrame):
-    if hasattr(model, "booster_") or model.__class__.__module__.startswith(("lightgbm", "sklearn.ensemble")):
+    tree_model_modules = ("lightgbm", "sklearn.ensemble", "xgboost")
+    if hasattr(model, "booster_") or model.__class__.__module__.startswith(tree_model_modules):
         return shap.TreeExplainer(model)
     if hasattr(model, "coef_"):
         background = background_frame.sample(
