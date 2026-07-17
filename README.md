@@ -136,3 +136,34 @@ Each run under `reports/YYYYMMDD_home_credit_experiments/<timestamp>_<campaign_n
 - SHAP-based interpretability exports
 - Excel bundling of experiment artifacts
 - MLflow experiment tracking and local model registry support
+
+## Serve the versioned business decision
+
+The final MLflow model packages the fitted pipeline together with its optimized
+business threshold. Its response contains the default probability, threshold,
+predicted class, and credit decision for every submitted client.
+
+```bash
+MODEL_VERSION=3  # Replace with the newly registered business-model version.
+
+poetry run mlflow models serve \
+  --model-uri "models:/home-credit-scoring/${MODEL_VERSION}" \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --env-manager local
+```
+
+The standard MLflow response uses a `predictions` envelope:
+
+```json
+{
+  "predictions": [
+    {
+      "default_probability": 0.37,
+      "business_threshold": 0.2203,
+      "predicted_default": 1,
+      "credit_decision": "refused"
+    }
+  ]
+}
+```
