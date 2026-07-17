@@ -48,6 +48,7 @@ from home_credit_mlops.modeling.interpretability import (
     export_shap_analysis,
 )
 from home_credit_mlops.modeling.metrics import (
+    build_threshold_sweep,
     business_scorer,
     evaluate_threshold,
     find_best_threshold,
@@ -296,6 +297,186 @@ def _export_all_model_diagnostics(
             artifacts.holdout_predictions["probability"].to_numpy(),
             artifacts.result.threshold,
         )
+
+
+def _plot_business_cost_vs_threshold(
+    output_dir: Path,
+    *,
+    model_name: str,
+    oof_threshold_metrics: pd.DataFrame,
+    holdout_threshold_metrics: pd.DataFrame,
+    selected_threshold: float,
+) -> None:
+    selected_oof = oof_threshold_metrics.loc[oof_threshold_metrics["selected_threshold"]].iloc[0]
+    selected_holdout = holdout_threshold_metrics.loc[holdout_threshold_metrics["selected_threshold"]].iloc[0]
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(
+        oof_threshold_metrics["threshold"],
+        oof_threshold_metrics["business_cost"],
+        label="OOF business cost",
+        color="#4C78A8",
+        linewidth=2,
+    )
+    plt.plot(
+        holdout_threshold_metrics["threshold"],
+        holdout_threshold_metrics["business_cost"],
+        label="Holdout business cost",
+        color="#F58518",
+        linewidth=2,
+        alpha=0.9,
+    )
+    plt.axvline(
+        selected_threshold,
+        color="#54A24B",
+        linestyle="--",
+        linewidth=2,
+        label=f"Selected threshold = {selected_threshold:.4f}",
+    )
+    plt.scatter(
+        [selected_threshold],
+        [selected_oof["business_cost"]],
+        color="#4C78A8",
+        s=80,
+        zorder=5,
+    )
+    plt.scatter(
+        [selected_threshold],
+        [selected_holdout["business_cost"]],
+        color="#F58518",
+        s=80,
+        zorder=5,
+    )
+    plt.title(f"{model_name} - business cost vs threshold")
+    plt.xlabel("Threshold")
+    plt.ylabel("Normalized business cost")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_dir / f"{model_name}_business_cost_vs_threshold.png", dpi=150)
+    plt.close()
+
+
+def _plot_classification_metrics_vs_threshold(
+    output_dir: Path,
+    *,
+    model_name: str,
+    oof_threshold_metrics: pd.DataFrame,
+    selected_threshold: float,
+) -> None:
+    plt.figure(figsize=(10, 6))
+    for metric_name, color in [
+        ("precision", "#4C78A8"),
+        ("recall", "#F58518"),
+        ("f1", "#54A24B"),
+    ]:
+        plt.plot(
+            oof_threshold_metrics["threshold"],
+            oof_threshold_metrics[metric_name],
+            label=f"OOF {metric_name}",
+            color=color,
+            linewidth=2,
+        )
+
+    plt.axvline(
+        selected_threshold,
+        color="#B279A2",
+        linestyle="--",
+        linewidth=2,
+        label=f"Selected threshold = {selected_threshold:.4f}",
+    )
+    plt.title(f"{model_name} - OOF classification metrics vs threshold")
+    plt.xlabel("Threshold")
+    plt.ylabel("Metric value")
+    plt.ylim(0.0, 1.0)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_dir / f"{model_name}_classification_metrics_vs_threshold.png", dpi=150)
+    plt.close()
+
+
+def _export_threshold_optimization_artifacts(
+    output_dir: Path,
+    *,
+    model_name: str,
+    oof_predictions: pd.DataFrame,
+    holdout_predictions: pd.DataFrame,
+    selected_threshold: float,
+    settings: Settings,
+) -> dict[str, Any]:
+    threshold_dir = output_dir / "threshold_optimization"
+    threshold_dir.mkdir(parents=True, exist_ok=True)
+
+    threshold_kwargs = {
+        "fn_cost": settings.business.fn_cost,
+        "fp_cost": settings.business.fp_cost,
+        "grid_size": settings.business.threshold_grid_size,
+        "extra_thresholds": [selected_threshold],
+    }
+    oof_threshold_metrics = build_threshold_sweep(
+        oof_predictions["TARGET"].to_numpy(),
+        oof_predictions["probability"].to_numpy(),
+        **threshold_kwargs,
+    )
+    holdout_threshold_metrics = build_threshold_sweep(
+        holdout_predictions["TARGET"].to_numpy(),
+        holdout_predictions["probability"].to_numpy(),
+        **threshold_kwargs,
+    )
+
+    oof_threshold_metrics["selected_threshold"] = np.isclose(
+        oof_threshold_metrics["threshold"],
+        selected_threshold,
+    )
+    holdout_threshold_metrics["selected_threshold"] = np.isclose(
+        holdout_threshold_metrics["threshold"],
+        selected_threshold,
+    )
+
+    oof_threshold_metrics.to_csv(
+        threshold_dir / f"{model_name}_oof_threshold_metrics.csv",
+        index=False,
+    )
+    holdout_threshold_metrics.to_csv(
+        threshold_dir / f"{model_name}_holdout_threshold_metrics.csv",
+        index=False,
+    )
+
+    _plot_business_cost_vs_threshold(
+        threshold_dir,
+        model_name=model_name,
+        oof_threshold_metrics=oof_threshold_metrics,
+        holdout_threshold_metrics=holdout_threshold_metrics,
+        selected_threshold=selected_threshold,
+    )
+    _plot_classification_metrics_vs_threshold(
+        threshold_dir,
+        model_name=model_name,
+        oof_threshold_metrics=oof_threshold_metrics,
+        selected_threshold=selected_threshold,
+    )
+
+    selected_oof = oof_threshold_metrics.loc[oof_threshold_metrics["selected_threshold"]].iloc[0]
+    selected_holdout = holdout_threshold_metrics.loc[holdout_threshold_metrics["selected_threshold"]].iloc[0]
+    summary = {
+        "model_name": model_name,
+        "selected_threshold": float(selected_threshold),
+        "selection_basis": "out_of_fold_business_cost_minimization",
+        "fn_cost": float(settings.business.fn_cost),
+        "fp_cost": float(settings.business.fp_cost),
+        "oof_business_cost_at_selected_threshold": float(selected_oof["business_cost"]),
+        "oof_recall_at_selected_threshold": float(selected_oof["recall"]),
+        "oof_precision_at_selected_threshold": float(selected_oof["precision"]),
+        "holdout_business_cost_at_selected_threshold": float(selected_holdout["business_cost"]),
+        "holdout_recall_at_selected_threshold": float(selected_holdout["recall"]),
+        "holdout_precision_at_selected_threshold": float(selected_holdout["precision"]),
+        "oof_min_business_cost": float(oof_threshold_metrics["business_cost"].min()),
+        "holdout_min_business_cost": float(holdout_threshold_metrics["business_cost"].min()),
+    }
+    (threshold_dir / f"{model_name}_threshold_selection_summary.json").write_text(
+        json.dumps(summary, indent=2),
+        encoding="utf-8",
+    )
+    return summary
 
 
 def _build_scoring(settings: Settings) -> dict[str, Any]:
@@ -667,7 +848,7 @@ def _log_experiment_artifacts(output_dir: Path) -> None:
         artifact_path = "predictions" if path.name == "best_model_test_predictions.csv" else "experiment"
         mlflow.log_artifact(path.as_posix(), artifact_path=artifact_path)
 
-    for directory_name in ["cv_results", "diagnostics", "interpretability", "predictions"]:
+    for directory_name in ["cv_results", "diagnostics", "interpretability", "predictions", "threshold_optimization"]:
         directory = output_dir / directory_name
         if directory.exists():
             mlflow.log_artifacts(directory.as_posix(), artifact_path=directory_name)
@@ -1038,6 +1219,14 @@ def _run_benchmark_body(
     best_artifacts = artifacts_by_model[best_model_name]
     best_result = best_artifacts.result
     best_model_spec = available_models[best_model_name]
+    threshold_optimization_summary = _export_threshold_optimization_artifacts(
+        destination,
+        model_name=best_model_name,
+        oof_predictions=best_artifacts.oof_predictions,
+        holdout_predictions=best_artifacts.holdout_predictions,
+        selected_threshold=best_result.threshold,
+        settings=settings,
+    )
 
     _export_all_model_diagnostics(
         destination,
@@ -1089,6 +1278,13 @@ def _run_benchmark_body(
         "selection_basis": "out_of_fold_business_cost_minimization",
         "fn_cost": float(settings.business.fn_cost),
         "fp_cost": float(settings.business.fp_cost),
+        "oof_business_cost_at_selected_threshold": float(
+            threshold_optimization_summary["oof_business_cost_at_selected_threshold"]
+        ),
+        "holdout_business_cost_at_selected_threshold": float(
+            threshold_optimization_summary["holdout_business_cost_at_selected_threshold"]
+        ),
+        "threshold_optimization_dir": (destination / "threshold_optimization").as_posix(),
     }
     (destination / "decision_threshold.json").write_text(
         json.dumps(decision_threshold, indent=2),

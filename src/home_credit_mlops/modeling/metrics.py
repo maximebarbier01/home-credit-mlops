@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterable
 
 import numpy as np
+import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -68,6 +70,23 @@ def _ks_statistic(y_true: np.ndarray, y_score: np.ndarray) -> float:
     return float(np.max(true_positive_rate - false_positive_rate))
 
 
+def _candidate_thresholds(
+    y_score: np.ndarray,
+    *,
+    grid_size: int,
+    extra_thresholds: Iterable[float] | None = None,
+) -> np.ndarray:
+    threshold_parts = [
+        np.linspace(0.0, 1.0, grid_size),
+        np.asarray(y_score, dtype=float),
+    ]
+    if extra_thresholds is not None:
+        extra_values = np.asarray(list(extra_thresholds), dtype=float)
+        if extra_values.size > 0:
+            threshold_parts.append(extra_values)
+    return np.unique(np.concatenate(threshold_parts))
+
+
 def business_cost(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -114,6 +133,54 @@ def evaluate_threshold(
     )
 
 
+def build_threshold_sweep(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    *,
+    fn_cost: float = 10.0,
+    fp_cost: float = 1.0,
+    grid_size: int = 401,
+    extra_thresholds: Iterable[float] | None = None,
+) -> pd.DataFrame:
+    """Evalue une grille de seuils pour documenter le compromis metier."""
+
+    rows: list[dict[str, float | int]] = []
+    for threshold in _candidate_thresholds(
+        y_score,
+        grid_size=grid_size,
+        extra_thresholds=extra_thresholds,
+    ):
+        result = evaluate_threshold(
+            y_true,
+            y_score,
+            threshold=float(threshold),
+            fn_cost=fn_cost,
+            fp_cost=fp_cost,
+        )
+        rows.append(
+            {
+                'threshold': result.threshold,
+                'business_cost': result.business_cost,
+                'business_score': result.business_score,
+                'precision': result.precision,
+                'recall': result.recall,
+                'f1': result.f1,
+                'accuracy': result.accuracy,
+                'balanced_accuracy': result.balanced_accuracy,
+                'roc_auc': result.roc_auc,
+                'average_precision': result.average_precision,
+                'brier_score': result.brier_score,
+                'ks_statistic': result.ks_statistic,
+                'true_negatives': result.true_negatives,
+                'false_positives': result.false_positives,
+                'false_negatives': result.false_negatives,
+                'true_positives': result.true_positives,
+            }
+        )
+
+    return pd.DataFrame(rows).sort_values('threshold').reset_index(drop=True)
+
+
 def find_best_threshold(
     y_true: np.ndarray,
     y_score: np.ndarray,
@@ -124,7 +191,7 @@ def find_best_threshold(
 ) -> ThresholdResult:
     # On teste a la fois une grille reguliere et les probabilites observees
     # pour ne pas rater un seuil metier pertinent.
-    candidate_thresholds = np.unique(np.concatenate([np.linspace(0.0, 1.0, grid_size), y_score]))
+    candidate_thresholds = _candidate_thresholds(y_score, grid_size=grid_size)
 
     best_result: ThresholdResult | None = None
     for threshold in candidate_thresholds:

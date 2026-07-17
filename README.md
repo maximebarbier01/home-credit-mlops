@@ -107,7 +107,7 @@ poetry run python scripts/run_home_credit_experiment.py --skip-mlflow --sample-s
 Each run under `reports/YYYYMMDD_home_credit_experiments/<timestamp>_<campaign_name>/` includes:
 
 - a root `summary.xlsx` workbook with cross-model comparison sheets such as `campaign_overview`, `model_performance_summary`, `cv_summary`, `holdout_summary`, `decision_threshold_summary`, and `mlflow_runs`, including the `base_model` and `sampling` comparison columns
-- per-folder Excel workbooks for `interpretability`, `diagnostics`, `predictions`, and `cv_results`
+- per-folder Excel workbooks for `interpretability`, `diagnostics`, `predictions`, `cv_results`, and `threshold_optimization`
 - diagnostics exported for each benchmarked candidate, with one subfolder per model or sampling variant
 - interpretability exports kept for the selected best model only
 - OOF and holdout prediction parquet files
@@ -116,6 +116,7 @@ Each run under `reports/YYYYMMDD_home_credit_experiments/<timestamp>_<campaign_n
 - SHAP global and local explanations
 - campaign-level metadata and MLflow run mapping
 - decision-threshold metadata
+- threshold-optimization tables and plots, including business cost vs threshold
 - packaged reports where CSV exports are converted to Excel tabs and then removed
 
 ## What this scaffold already covers
