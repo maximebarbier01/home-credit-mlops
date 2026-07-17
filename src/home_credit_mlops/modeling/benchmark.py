@@ -308,7 +308,9 @@ def _plot_business_cost_vs_threshold(
     selected_threshold: float,
 ) -> None:
     selected_oof = oof_threshold_metrics.loc[oof_threshold_metrics["selected_threshold"]].iloc[0]
-    selected_holdout = holdout_threshold_metrics.loc[holdout_threshold_metrics["selected_threshold"]].iloc[0]
+    selected_holdout = holdout_threshold_metrics.loc[
+        holdout_threshold_metrics["selected_threshold"]
+    ].iloc[0]
 
     plt.figure(figsize=(10, 6))
     plt.plot(
@@ -456,7 +458,9 @@ def _export_threshold_optimization_artifacts(
     )
 
     selected_oof = oof_threshold_metrics.loc[oof_threshold_metrics["selected_threshold"]].iloc[0]
-    selected_holdout = holdout_threshold_metrics.loc[holdout_threshold_metrics["selected_threshold"]].iloc[0]
+    selected_holdout = holdout_threshold_metrics.loc[
+        holdout_threshold_metrics["selected_threshold"]
+    ].iloc[0]
     summary = {
         "model_name": model_name,
         "selected_threshold": float(selected_threshold),
@@ -586,37 +590,41 @@ def _build_campaign_overview(
     output_dir: Path,
     test_dataset_available: bool,
 ) -> pd.DataFrame:
-    return pd.DataFrame([{
-        "campaign_name": campaign_name,
-        "campaign_slug": _slugify_campaign_name(campaign_name),
-        "created_at": created_at,
-        "dataset_label": dataset_label,
-        "dataset_path": dataset_path,
-        "output_dir": output_dir.as_posix(),
-        "target_column": target_column,
-        "id_column": id_column,
-        "drop_columns": json.dumps(drop_columns),
-        "candidate_models": ",".join(selected_model_names),
-        "candidate_model_count": len(selected_model_names),
-        "sampling_strategies": ",".join(sampling_strategies),
-        "sample_size_requested": sample_size if sample_size is not None else "full_dataset",
-        "sampled_rows": int(len(experiment_frame)),
-        "sampled_columns": int(experiment_frame.shape[1]),
-        "train_rows": int(train_rows),
-        "holdout_rows": int(holdout_rows),
-        "target_rate": float(experiment_frame[target_column].mean()),
-        "cv_folds": int(cv_folds),
-        "n_jobs": int(n_jobs),
-        "fn_cost": float(fn_cost),
-        "fp_cost": float(fp_cost),
-        "threshold_policy": "oof_business_cost_minimization",
-        "mlflow_enabled": bool(enable_mlflow),
-        "mlflow_root_run_id": root_run_id or "",
-        "registered_model_name": registered_model_name or "",
-        "registered_model_version": registered_model_version or "",
-        "best_model": best_model_name,
-        "test_dataset_available": bool(test_dataset_available),
-    }])
+    return pd.DataFrame(
+        [
+            {
+                "campaign_name": campaign_name,
+                "campaign_slug": _slugify_campaign_name(campaign_name),
+                "created_at": created_at,
+                "dataset_label": dataset_label,
+                "dataset_path": dataset_path,
+                "output_dir": output_dir.as_posix(),
+                "target_column": target_column,
+                "id_column": id_column,
+                "drop_columns": json.dumps(drop_columns),
+                "candidate_models": ",".join(selected_model_names),
+                "candidate_model_count": len(selected_model_names),
+                "sampling_strategies": ",".join(sampling_strategies),
+                "sample_size_requested": sample_size if sample_size is not None else "full_dataset",
+                "sampled_rows": int(len(experiment_frame)),
+                "sampled_columns": int(experiment_frame.shape[1]),
+                "train_rows": int(train_rows),
+                "holdout_rows": int(holdout_rows),
+                "target_rate": float(experiment_frame[target_column].mean()),
+                "cv_folds": int(cv_folds),
+                "n_jobs": int(n_jobs),
+                "fn_cost": float(fn_cost),
+                "fp_cost": float(fp_cost),
+                "threshold_policy": "oof_business_cost_minimization",
+                "mlflow_enabled": bool(enable_mlflow),
+                "mlflow_root_run_id": root_run_id or "",
+                "registered_model_name": registered_model_name or "",
+                "registered_model_version": registered_model_version or "",
+                "best_model": best_model_name,
+                "test_dataset_available": bool(test_dataset_available),
+            }
+        ]
+    )
 
 
 def _build_cv_summary(results_frame: pd.DataFrame, *, best_model_name: str) -> pd.DataFrame:
@@ -626,10 +634,25 @@ def _build_cv_summary(results_frame: pd.DataFrame, *, best_model_name: str) -> p
     summary["base_model"] = summary["base_model_name"]
     summary["sampling"] = summary["sampling_strategy"]
     ordered_cols = [
-        "selected_as_best", "model", "base_model", "sampling", "threshold", "cv_business_cost", "cv_roc_auc",
-        "cv_average_precision", "cv_accuracy", "cv_balanced_accuracy", "oof_roc_auc",
-        "oof_average_precision", "oof_precision", "oof_recall", "oof_f1",
-        "oof_accuracy", "oof_balanced_accuracy", "best_params", "run_id",
+        "selected_as_best",
+        "model",
+        "base_model",
+        "sampling",
+        "threshold",
+        "cv_business_cost",
+        "cv_roc_auc",
+        "cv_average_precision",
+        "cv_accuracy",
+        "cv_balanced_accuracy",
+        "oof_roc_auc",
+        "oof_average_precision",
+        "oof_precision",
+        "oof_recall",
+        "oof_f1",
+        "oof_accuracy",
+        "oof_balanced_accuracy",
+        "best_params",
+        "run_id",
     ]
     return summary[ordered_cols].copy()
 
@@ -641,17 +664,35 @@ def _build_holdout_summary(results_frame: pd.DataFrame, *, best_model_name: str)
     summary["base_model"] = summary["base_model_name"]
     summary["sampling"] = summary["sampling_strategy"]
     ordered_cols = [
-        "selected_as_best", "model", "base_model", "sampling", "threshold", "holdout_business_cost",
-        "holdout_business_score", "holdout_roc_auc", "holdout_average_precision",
-        "holdout_accuracy", "holdout_balanced_accuracy", "holdout_precision",
-        "holdout_recall", "holdout_f1", "holdout_brier_score", "holdout_ks_statistic",
-        "true_negatives", "false_positives", "false_negatives", "true_positives",
-        "best_params", "run_id",
+        "selected_as_best",
+        "model",
+        "base_model",
+        "sampling",
+        "threshold",
+        "holdout_business_cost",
+        "holdout_business_score",
+        "holdout_roc_auc",
+        "holdout_average_precision",
+        "holdout_accuracy",
+        "holdout_balanced_accuracy",
+        "holdout_precision",
+        "holdout_recall",
+        "holdout_f1",
+        "holdout_brier_score",
+        "holdout_ks_statistic",
+        "true_negatives",
+        "false_positives",
+        "false_negatives",
+        "true_positives",
+        "best_params",
+        "run_id",
     ]
     return summary[ordered_cols].copy()
 
 
-def _build_decision_threshold_summary(results_frame: pd.DataFrame, *, best_model_name: str) -> pd.DataFrame:
+def _build_decision_threshold_summary(
+    results_frame: pd.DataFrame, *, best_model_name: str
+) -> pd.DataFrame:
     summary = results_frame.copy()
     summary.insert(0, "selected_as_best", summary["model_name"] == best_model_name)
     summary["model"] = summary["model_name"]
@@ -659,44 +700,68 @@ def _build_decision_threshold_summary(results_frame: pd.DataFrame, *, best_model
     summary["sampling"] = summary["sampling_strategy"]
     summary["selection_basis"] = "out_of_fold_business_cost_minimization"
     ordered_cols = [
-        "selected_as_best", "model", "base_model", "sampling", "selection_basis", "threshold",
-        "holdout_business_cost", "holdout_business_score", "holdout_precision",
-        "holdout_recall", "holdout_f1", "true_negatives", "false_positives",
-        "false_negatives", "true_positives", "run_id",
+        "selected_as_best",
+        "model",
+        "base_model",
+        "sampling",
+        "selection_basis",
+        "threshold",
+        "holdout_business_cost",
+        "holdout_business_score",
+        "holdout_precision",
+        "holdout_recall",
+        "holdout_f1",
+        "true_negatives",
+        "false_positives",
+        "false_negatives",
+        "true_positives",
+        "run_id",
     ]
     return summary[ordered_cols].copy()
 
 
-def _build_mlflow_runs_summary(results_frame: pd.DataFrame, *, campaign_name: str, best_model_name: str, root_run_id: str | None) -> pd.DataFrame:
-    rows = [{
-        "scope": "campaign",
-        "campaign_name": campaign_name,
-        "model": "",
-        "base_model": "",
-        "sampling": "",
-        "run_id": root_run_id or "",
-        "selected_as_best": False,
-        "threshold": np.nan,
-        "holdout_business_cost": np.nan,
-        "holdout_roc_auc": np.nan,
-    }]
-    for row in results_frame.itertuples(index=False):
-        rows.append({
-            "scope": "model",
+def _build_mlflow_runs_summary(
+    results_frame: pd.DataFrame,
+    *,
+    campaign_name: str,
+    best_model_name: str,
+    root_run_id: str | None,
+) -> pd.DataFrame:
+    rows = [
+        {
+            "scope": "campaign",
             "campaign_name": campaign_name,
-            "model": row.model_name,
-            "base_model": row.base_model_name,
-            "sampling": row.sampling_strategy,
-            "run_id": row.run_id or "",
-            "selected_as_best": row.model_name == best_model_name,
-            "threshold": float(row.threshold),
-            "holdout_business_cost": float(row.holdout_business_cost),
-            "holdout_roc_auc": float(row.holdout_roc_auc),
-        })
+            "model": "",
+            "base_model": "",
+            "sampling": "",
+            "run_id": root_run_id or "",
+            "selected_as_best": False,
+            "threshold": np.nan,
+            "holdout_business_cost": np.nan,
+            "holdout_roc_auc": np.nan,
+        }
+    ]
+    for row in results_frame.itertuples(index=False):
+        rows.append(
+            {
+                "scope": "model",
+                "campaign_name": campaign_name,
+                "model": row.model_name,
+                "base_model": row.base_model_name,
+                "sampling": row.sampling_strategy,
+                "run_id": row.run_id or "",
+                "selected_as_best": row.model_name == best_model_name,
+                "threshold": float(row.threshold),
+                "holdout_business_cost": float(row.holdout_business_cost),
+                "holdout_roc_auc": float(row.holdout_roc_auc),
+            }
+        )
     return pd.DataFrame(rows)
 
 
-def _build_best_model_summary(performance_summary: pd.DataFrame, *, best_model_name: str) -> pd.DataFrame:
+def _build_best_model_summary(
+    performance_summary: pd.DataFrame, *, best_model_name: str
+) -> pd.DataFrame:
     return performance_summary.loc[performance_summary["model"] == best_model_name].copy()
 
 
@@ -845,10 +910,18 @@ def _log_experiment_artifacts(output_dir: Path) -> None:
     for path in sorted(output_dir.iterdir()):
         if not path.is_file() or path.suffix.lower() not in supported_suffixes:
             continue
-        artifact_path = "predictions" if path.name == "best_model_test_predictions.csv" else "experiment"
+        artifact_path = (
+            "predictions" if path.name == "best_model_test_predictions.csv" else "experiment"
+        )
         mlflow.log_artifact(path.as_posix(), artifact_path=artifact_path)
 
-    for directory_name in ["cv_results", "diagnostics", "interpretability", "predictions", "threshold_optimization"]:
+    for directory_name in [
+        "cv_results",
+        "diagnostics",
+        "interpretability",
+        "predictions",
+        "threshold_optimization",
+    ]:
         directory = output_dir / directory_name
         if directory.exists():
             mlflow.log_artifacts(directory.as_posix(), artifact_path=directory_name)
@@ -1128,7 +1201,9 @@ def _run_benchmark_body(
                 "drop_columns": ",".join(drop_columns),
                 "candidate_models": ",".join(selected_model_names),
                 "sampling_strategies": ",".join(sampling_modes),
-                "sample_size": int(sample_size) if sample_size is not None else int(len(experiment_frame)),
+                "sample_size": int(sample_size)
+                if sample_size is not None
+                else int(len(experiment_frame)),
                 "cv_folds": int(cv_folds),
                 "n_jobs": int(settings.training.n_jobs),
                 "test_size": float(settings.dataset.test_size),
@@ -1188,7 +1263,7 @@ def _run_benchmark_body(
         lambda params: json.dumps(_jsonable(params))
     )
     results_frame = results_frame.sort_values(
-        ["holdout_business_cost", "holdout_average_precision", "holdout_roc_auc"],
+        ["cv_business_cost", "cv_average_precision", "cv_roc_auc"],
         ascending=[True, False, False],
     ).reset_index(drop=True)
     best_model_name = results_frame.iloc[0]["model_name"]
@@ -1199,8 +1274,12 @@ def _run_benchmark_body(
     )
     cv_summary = _build_cv_summary(results_frame, best_model_name=best_model_name)
     holdout_summary = _build_holdout_summary(results_frame, best_model_name=best_model_name)
-    threshold_summary = _build_decision_threshold_summary(results_frame, best_model_name=best_model_name)
-    best_model_summary = _build_best_model_summary(performance_summary, best_model_name=best_model_name)
+    threshold_summary = _build_decision_threshold_summary(
+        results_frame, best_model_name=best_model_name
+    )
+    best_model_summary = _build_best_model_summary(
+        performance_summary, best_model_name=best_model_name
+    )
     root_run_id = mlflow.active_run().info.run_id if enable_mlflow and mlflow.active_run() else None
     mlflow_runs = _build_mlflow_runs_summary(
         results_frame,
@@ -1553,7 +1632,9 @@ def main() -> None:
         )
 
     effective_model_names = args.model or None
-    effective_sampling_strategies = list(dict.fromkeys(args.sampling or list(DEFAULT_SAMPLING_STRATEGIES)))
+    effective_sampling_strategies = list(
+        dict.fromkeys(args.sampling or list(DEFAULT_SAMPLING_STRATEGIES))
+    )
     effective_cv_folds = args.cv_folds or settings.training.cv_folds
     campaign_name = args.campaign_name or _build_default_campaign_name(
         effective_model_names,
