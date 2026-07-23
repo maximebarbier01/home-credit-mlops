@@ -6,8 +6,10 @@ import numpy as np
 import pandas as pd
 
 from home_credit_mlops.modeling.benchmark import (
+    BenchmarkRunResult,
     _build_default_campaign_name,
     _build_mlflow_runs_summary,
+    _build_parent_best_model_mlflow_payload,
     _export_threshold_optimization_artifacts,
     _slugify_campaign_name,
 )
@@ -97,6 +99,59 @@ def test_build_mlflow_runs_summary_contains_campaign_models_and_sampling() -> No
     assert set(summary['scope']) == {'campaign', 'model'}
     assert summary.loc[summary['model'] == 'lightgbm', 'selected_as_best'].item() is True
     assert summary.loc[summary['model'] == 'extra_trees__smote', 'sampling'].item() == 'smote'
+
+
+def test_build_parent_best_model_mlflow_payload_promotes_champion_to_parent_run() -> None:
+    result = BenchmarkRunResult(
+        model_name='lightgbm__smote',
+        base_model_name='lightgbm',
+        sampling_strategy='smote',
+        run_id='child-1',
+        best_params={'model__learning_rate': 0.03, 'model__n_estimators': 500},
+        threshold=0.2203,
+        cv_business_cost=0.4881,
+        cv_roc_auc=0.786,
+        cv_average_precision=0.276,
+        cv_accuracy=0.72,
+        cv_balanced_accuracy=0.71,
+        oof_roc_auc=0.785,
+        oof_average_precision=0.275,
+        oof_precision=0.19,
+        oof_recall=0.70,
+        oof_f1=0.30,
+        oof_accuracy=0.69,
+        oof_balanced_accuracy=0.72,
+        holdout_business_cost=0.4842,
+        holdout_business_score=-0.4842,
+        holdout_roc_auc=0.7898,
+        holdout_average_precision=0.2896,
+        holdout_accuracy=0.73,
+        holdout_balanced_accuracy=0.72,
+        holdout_precision=0.188,
+        holdout_recall=0.705,
+        holdout_f1=0.297,
+        holdout_brier_score=0.17,
+        holdout_ks_statistic=0.43,
+        true_negatives=41409,
+        false_positives=15129,
+        false_negatives=1465,
+        true_positives=3500,
+    )
+
+    payload = _build_parent_best_model_mlflow_payload(
+        result,
+        registered_model_name='home-credit-scoring',
+        registered_model_version='3',
+    )
+
+    assert payload['params']['best_model_name'] == 'lightgbm__smote'
+    assert payload['params']['best_registered_model_version'] == '3'
+    assert payload['tags']['best_selection_policy'] == (
+        'cv_business_cost_then_average_precision_then_roc_auc'
+    )
+    assert payload['metrics']['best_cv_business_cost'] == 0.4881
+    assert payload['metrics']['best_holdout_business_cost'] == 0.4842
+    assert payload['summary']['best_params']['model__n_estimators'] == 500
 
 
 def test_export_threshold_optimization_artifacts_writes_expected_files(tmp_path: Path) -> None:

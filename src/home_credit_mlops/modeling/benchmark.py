@@ -520,6 +520,80 @@ def _metrics_from_result(result: BenchmarkRunResult) -> dict[str, float]:
     return metrics
 
 
+def _build_parent_best_model_mlflow_payload(
+    result: BenchmarkRunResult,
+    *,
+    registered_model_name: str | None,
+    registered_model_version: str | None,
+) -> dict[str, dict[str, Any]]:
+    best_params = _jsonable(result.best_params)
+    params: dict[str, Any] = {
+        "best_model_name": result.model_name,
+        "best_base_model_name": result.base_model_name,
+        "best_sampling_strategy": result.sampling_strategy,
+        "best_decision_threshold": float(result.threshold),
+        "best_child_run_id": result.run_id or "",
+        "best_params_json": json.dumps(best_params),
+    }
+    if registered_model_name:
+        params["best_registered_model_name"] = registered_model_name
+    if registered_model_version:
+        params["best_registered_model_version"] = registered_model_version
+
+    metrics = {
+        f"best_{metric_name}": metric_value
+        for metric_name, metric_value in _metrics_from_result(result).items()
+    }
+
+    tags = {
+        "best_model_name": result.model_name,
+        "best_base_model_name": result.base_model_name,
+        "best_sampling_strategy": result.sampling_strategy,
+        "best_selection_policy": "cv_business_cost_then_average_precision_then_roc_auc",
+    }
+    if registered_model_name:
+        tags["registered_model_name"] = registered_model_name
+    if registered_model_version:
+        tags["registered_model_version"] = registered_model_version
+
+    summary = {
+        "best_model": result.model_name,
+        "base_model": result.base_model_name,
+        "sampling_strategy": result.sampling_strategy,
+        "threshold": float(result.threshold),
+        "best_params": best_params,
+        "child_run_id": result.run_id,
+        "registered_model_name": registered_model_name,
+        "registered_model_version": registered_model_version,
+        "selection_policy": "cv_business_cost_then_average_precision_then_roc_auc",
+        "metrics": metrics,
+    }
+
+    return {
+        "tags": tags,
+        "params": params,
+        "metrics": metrics,
+        "summary": summary,
+    }
+
+
+def _log_parent_best_model_summary(
+    result: BenchmarkRunResult,
+    *,
+    registered_model_name: str | None,
+    registered_model_version: str | None,
+) -> None:
+    payload = _build_parent_best_model_mlflow_payload(
+        result,
+        registered_model_name=registered_model_name,
+        registered_model_version=registered_model_version,
+    )
+    mlflow.set_tags(payload["tags"])
+    mlflow.log_params(payload["params"])
+    mlflow.log_metrics(payload["metrics"])
+    mlflow.log_dict(payload["summary"], "best_model_parent_summary.json")
+
+
 def _f_beta_from_precision_recall(
     precision: float,
     recall: float,
@@ -1398,6 +1472,11 @@ def _run_benchmark_body(
             features=features,
             best_result=best_result,
             register_model_name=register_model_name,
+        )
+        _log_parent_best_model_summary(
+            best_result,
+            registered_model_name=register_model_name,
+            registered_model_version=registered_model_version,
         )
 
     campaign_overview = _build_campaign_overview(
