@@ -44,6 +44,26 @@ PREVIOUS_DAY_COLUMNS = [
 ]
 
 
+def load_raw_table(raw_dir: Path, filename: str, **read_csv_kwargs: object) -> tuple[pd.DataFrame, int]:
+    """Charge une table brute Kaggle et retire les doublons de lignes exactes.
+
+    Les identifiants cles (SK_ID_CURR, SK_ID_PREV, SK_ID_BUREAU...) se
+    repetent legitimement dans ces tables event-level (plusieurs credits ou
+    echeances par client) : ce n'est pas un doublon. Seules les lignes
+    strictement identiques sur toutes les colonnes sont traitees comme des
+    doublons de saisie et supprimees. Verifie empiriquement sur l'export
+    Kaggle courant : aucune des tables brutes n'en contient (voir
+    ``table_profiles.csv`` / ``dataset_metadata.json`` genere par
+    ``build_home_credit_dataset``), donc cet appel est aujourd'hui un
+    filet de securite plutot qu'une correction active.
+    """
+    frame = pd.read_csv(raw_dir / filename, **read_csv_kwargs)
+    n_duplicates = int(frame.duplicated().sum())
+    if n_duplicates:
+        frame = frame.drop_duplicates().reset_index(drop=True)
+    return frame, n_duplicates
+
+
 def reduce_memory_usage(frame: pd.DataFrame) -> pd.DataFrame:
     optimized = frame.copy()
     for column in optimized.columns:
@@ -111,7 +131,12 @@ def build_missingness_report(frame: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def collect_table_profile(frame: pd.DataFrame, table_name: str) -> dict[str, object]:
+def collect_table_profile(
+    frame: pd.DataFrame,
+    table_name: str,
+    *,
+    full_row_duplicates_removed: int | None = None,
+) -> dict[str, object]:
     profile: dict[str, object] = {
         "table_name": table_name,
         "rows": int(len(frame)),
@@ -121,11 +146,17 @@ def collect_table_profile(frame: pd.DataFrame, table_name: str) -> dict[str, obj
         "categorical_columns": int(
             frame.select_dtypes(include=["object", "category", "bool"]).shape[1]
         ),
+        # Doublons de lignes strictement identiques, retires en amont par
+        # load_raw_table (None = non applicable, ex. table deja agregee).
+        "full_row_duplicates_removed": full_row_duplicates_removed,
     }
     for key_column in RAW_TABLE_KEYS.get(table_name, []):
         if key_column in frame.columns:
             profile[f"{key_column.lower()}_nunique"] = int(frame[key_column].nunique(dropna=False))
-            profile[f"{key_column.lower()}_duplicate_rows"] = int(
+            # Repetition attendue de la cle sur une table event-level (un
+            # meme client/pret a plusieurs lignes) : informatif uniquement,
+            # ce n'est pas un doublon a retirer.
+            profile[f"{key_column.lower()}_key_repetitions"] = int(
                 frame[key_column].duplicated().sum()
             )
     return profile
@@ -289,11 +320,19 @@ def clean_application_data(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def aggregate_bureau_features(raw_dir: Path) -> tuple[pd.DataFrame, list[dict[str, object]]]:
-    bureau = reduce_memory_usage(pd.read_csv(raw_dir / "bureau.csv"))
-    bureau_balance = reduce_memory_usage(pd.read_csv(raw_dir / "bureau_balance.csv"))
+    bureau, bureau_duplicates = load_raw_table(raw_dir, "bureau.csv")
+    bureau = reduce_memory_usage(bureau)
+    bureau_balance, bureau_balance_duplicates = load_raw_table(raw_dir, "bureau_balance.csv")
+    bureau_balance = reduce_memory_usage(bureau_balance)
     profiles = [
-        collect_table_profile(bureau, "bureau.csv"),
-        collect_table_profile(bureau_balance, "bureau_balance.csv"),
+        collect_table_profile(
+            bureau, "bureau.csv", full_row_duplicates_removed=bureau_duplicates
+        ),
+        collect_table_profile(
+            bureau_balance,
+            "bureau_balance.csv",
+            full_row_duplicates_removed=bureau_balance_duplicates,
+        ),
     ]
 
     bureau_balance, balance_category_columns = one_hot_encode(
@@ -368,8 +407,15 @@ def aggregate_bureau_features(raw_dir: Path) -> tuple[pd.DataFrame, list[dict[st
 def aggregate_previous_application_features(
     raw_dir: Path,
 ) -> tuple[pd.DataFrame, list[dict[str, object]]]:
-    previous = reduce_memory_usage(pd.read_csv(raw_dir / "previous_application.csv"))
-    profiles = [collect_table_profile(previous, "previous_application.csv")]
+    previous, previous_duplicates = load_raw_table(raw_dir, "previous_application.csv")
+    previous = reduce_memory_usage(previous)
+    profiles = [
+        collect_table_profile(
+            previous,
+            "previous_application.csv",
+            full_row_duplicates_removed=previous_duplicates,
+        )
+    ]
 
     for column in PREVIOUS_DAY_COLUMNS:
         if column in previous.columns:
@@ -446,8 +492,13 @@ def aggregate_previous_application_features(
 
 
 def aggregate_pos_cash_features(raw_dir: Path) -> tuple[pd.DataFrame, list[dict[str, object]]]:
-    pos_cash = reduce_memory_usage(pd.read_csv(raw_dir / "POS_CASH_balance.csv"))
-    profiles = [collect_table_profile(pos_cash, "POS_CASH_balance.csv")]
+    pos_cash, pos_cash_duplicates = load_raw_table(raw_dir, "POS_CASH_balance.csv")
+    pos_cash = reduce_memory_usage(pos_cash)
+    profiles = [
+        collect_table_profile(
+            pos_cash, "POS_CASH_balance.csv", full_row_duplicates_removed=pos_cash_duplicates
+        )
+    ]
 
     pos_cash, category_columns = one_hot_encode(pos_cash)
     aggregations: dict[str, list[str]] = {
@@ -472,8 +523,15 @@ def aggregate_pos_cash_features(raw_dir: Path) -> tuple[pd.DataFrame, list[dict[
 def aggregate_installments_features(
     raw_dir: Path,
 ) -> tuple[pd.DataFrame, list[dict[str, object]]]:
-    installments = reduce_memory_usage(pd.read_csv(raw_dir / "installments_payments.csv"))
-    profiles = [collect_table_profile(installments, "installments_payments.csv")]
+    installments, installments_duplicates = load_raw_table(raw_dir, "installments_payments.csv")
+    installments = reduce_memory_usage(installments)
+    profiles = [
+        collect_table_profile(
+            installments,
+            "installments_payments.csv",
+            full_row_duplicates_removed=installments_duplicates,
+        )
+    ]
 
     installments["PAYMENT_RATIO"] = safe_ratio(
         installments["AMT_PAYMENT"],
@@ -515,8 +573,15 @@ def aggregate_installments_features(
 def aggregate_credit_card_features(
     raw_dir: Path,
 ) -> tuple[pd.DataFrame, list[dict[str, object]]]:
-    credit_card = reduce_memory_usage(pd.read_csv(raw_dir / "credit_card_balance.csv"))
-    profiles = [collect_table_profile(credit_card, "credit_card_balance.csv")]
+    credit_card, credit_card_duplicates = load_raw_table(raw_dir, "credit_card_balance.csv")
+    credit_card = reduce_memory_usage(credit_card)
+    profiles = [
+        collect_table_profile(
+            credit_card,
+            "credit_card_balance.csv",
+            full_row_duplicates_removed=credit_card_duplicates,
+        )
+    ]
 
     credit_card, category_columns = one_hot_encode(credit_card)
     aggregations: dict[str, list[str]] = {
@@ -673,13 +738,25 @@ def build_home_credit_dataset(
 
     # Charger les deux tables principales, puis les aligner pour preparer
     # une seule base client avant les jointures annexes.
-    application_train = pd.read_csv(raw_dir / "application_train.csv")
-    application_test = pd.read_csv(raw_dir / "application_test.csv")
+    application_train, application_train_duplicates = load_raw_table(
+        raw_dir, "application_train.csv"
+    )
+    application_test, application_test_duplicates = load_raw_table(
+        raw_dir, "application_test.csv"
+    )
     application_test = application_test.assign(TARGET=np.nan)
 
     raw_profiles = [
-        collect_table_profile(application_train, "application_train.csv"),
-        collect_table_profile(application_test, "application_test.csv"),
+        collect_table_profile(
+            application_train,
+            "application_train.csv",
+            full_row_duplicates_removed=application_train_duplicates,
+        ),
+        collect_table_profile(
+            application_test,
+            "application_test.csv",
+            full_row_duplicates_removed=application_test_duplicates,
+        ),
     ]
 
     combined_application = pd.concat(
@@ -764,6 +841,10 @@ def build_home_credit_dataset(
     # Regrouper toutes les sorties du dossier dans un seul classeur Excel
     # afin de faciliter la lecture par le mentor ou le reviewer.
     report_workbook_path = report_dir / f"{report_dir.name}.xlsx"
+    duplicate_rows_removed = {
+        profile["table_name"]: profile["full_row_duplicates_removed"]
+        for profile in raw_profiles + aggregation_profiles
+    }
     metadata = {
         "pipeline_steps": [
             "data_ingestion",
@@ -779,6 +860,10 @@ def build_home_credit_dataset(
         "test_columns": int(test_frame.shape[1]),
         "target_rate": float(train_frame["TARGET"].mean()),
         "constant_columns_removed": constant_columns,
+        # Doublons de lignes exactes retires table brute par table brute
+        # (voir load_raw_table) ; repetition d'identifiants sur les tables
+        # event-level est normale et n'est pas comptee ici.
+        "duplicate_rows_removed": duplicate_rows_removed,
         "train_output_path": train_output_path.as_posix(),
         "test_output_path": test_output_path.as_posix(),
         "report_dir": report_dir.as_posix(),

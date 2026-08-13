@@ -8,6 +8,7 @@ from typing import Any, Callable, Sequence
 from lightgbm import LGBMClassifier
 from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
 from xgboost import XGBClassifier
 
 
@@ -29,6 +30,9 @@ class ModelSpec:
     param_grid: list[dict[str, list[Any]]]
     base_model_name: str
     sampling_strategy: str = "baseline"
+    # Le MLP (et tout futur modele sensible a l'echelle) a besoin d'une
+    # standardisation explicite : les arbres/boosting s'en passent.
+    requires_scaling: bool = False
 
 
 def get_model_specs() -> dict[str, ModelSpec]:
@@ -125,6 +129,26 @@ def get_model_specs() -> dict[str, ModelSpec]:
                 }
             ],
         ),
+        "mlp": ModelSpec(
+            name="mlp",
+            base_model_name="mlp",
+            estimator_factory=lambda: MLPClassifier(
+                activation="relu",
+                alpha=1e-4,
+                early_stopping=True,
+                max_iter=300,
+                random_state=42,
+            ),
+            param_grid=[
+                {
+                    "model__hidden_layer_sizes": [(64,), (64, 32)],
+                    "model__alpha": [1e-4, 1e-3],
+                }
+            ],
+            # MLPClassifier ne supporte pas class_weight : le desequilibre
+            # est gere via les strategies de sampling (SMOTE, etc.).
+            requires_scaling=True,
+        ),
     }
 
 
@@ -163,5 +187,6 @@ def build_candidate_model_specs(
                 estimator_factory=base_spec.estimator_factory,
                 param_grid=base_spec.param_grid,
                 sampling_strategy=sampling_strategy,
+                requires_scaling=base_spec.requires_scaling,
             )
     return candidates

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 import warnings
 
@@ -12,6 +13,8 @@ import seaborn as sns
 import shap
 from scipy import sparse
 from sklearn.pipeline import Pipeline
+
+LOGGER = logging.getLogger(__name__)
 
 warnings.filterwarnings(
     "ignore",
@@ -71,7 +74,12 @@ def _build_transformed_feature_frame(
     features: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     preprocessor = pipeline.named_steps["preprocessor"]
-    transformed = preprocessor.transform(features)
+    # On rejoue toutes les etapes precedant le modele (preprocessor, puis
+    # un eventuel scaler pour les modeles sensibles a l'echelle comme le
+    # MLP) afin que SHAP/feature importance voient exactement ce que le
+    # modele recoit en entree.
+    pre_model_steps = [(name, step) for name, step in pipeline.steps if name != "model"]
+    transformed = Pipeline(steps=pre_model_steps).transform(features)
     if sparse.issparse(transformed):
         transformed = transformed.toarray()
     transformed = np.asarray(transformed, dtype=np.float32)
@@ -122,7 +130,19 @@ def export_feature_importance(
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
 
-    transformed_importance, grouped_importance = compute_feature_importance(pipeline)
+    try:
+        transformed_importance, grouped_importance = compute_feature_importance(pipeline)
+    except ValueError as error:
+        # Modeles sans feature_importances_/coef_ natifs (ex. MLP) : on ne
+        # fait pas echouer toute la campagne, l'importance globale reste
+        # disponible via les exports SHAP (mean_abs_shap).
+        LOGGER.warning(
+            "Feature importance native indisponible (%s) ; se reporter aux "
+            "exports SHAP pour l'importance globale.",
+            error,
+        )
+        return {}
+
     transformed_path = destination / "feature_importance_transformed.csv"
     grouped_path = destination / "feature_importance_grouped.csv"
     transformed_importance.to_csv(transformed_path, index=False)
@@ -156,8 +176,25 @@ def _build_shap_explainer(model, background_frame: pd.DataFrame):
             random_state=42,
         )
         return shap.LinearExplainer(model, background)
-    raise ValueError(
-        f"SHAP analysis is not configured for model type {model.__class__.__name__}."
+
+    # Repli generique (ex. MLP) : aucune structure interne exploitable,
+    # on explique donc predict_proba directement. algorithm="permutation"
+    # est force explicitement (plutot que "auto") car "auto" peut choisir
+    # ExactExplainer, exponentiel en nombre de features et incompatible
+    # avec l'argument max_evals. max_evals doit depasser 2 * nb_features + 1,
+    # sans quoi shap leve une erreur des la premiere ligne expliquee (le
+    # defaut de 500 est trop bas des que le One-Hot Encoding depasse ~250
+    # colonnes, ce qui est le cas ici).
+    background = background_frame.sample(
+        n=min(100, len(background_frame)),
+        random_state=42,
+    )
+    max_evals = max(500, 2 * background_frame.shape[1] + 1)
+    return shap.Explainer(
+        model.predict_proba,
+        background,
+        algorithm="permutation",
+        max_evals=max_evals,
     )
 
 

@@ -194,6 +194,30 @@ centralise :
 - le contrôle des doublons et des colonnes constantes ;
 - la traçabilité des jointures et des dimensions de tables.
 
+#### Politique de gestion des doublons
+
+`load_raw_table()` (dans `data/home_credit.py`) charge chaque table brute et
+distingue explicitement deux notions, sinon faciles à confondre :
+
+- **doublons de lignes strictement identiques** (toutes colonnes égales) :
+  ce sont de vrais doublons de saisie. Ils sont automatiquement supprimés au
+  chargement, et le nombre de lignes retirées par table est enregistré dans
+  `dataset_metadata.json` (clé `duplicate_rows_removed`) ainsi que dans
+  `table_profiles.csv` (colonne `full_row_duplicates_removed`) ;
+- **répétition d'une clé métier** (`SK_ID_CURR`, `SK_ID_PREV`,
+  `SK_ID_BUREAU`...) : ces tables sont *event-level*, un même client ou un
+  même prêt a normalement plusieurs lignes (plusieurs crédits bureau,
+  plusieurs échéances, etc.). Ce n'est pas un doublon et ces lignes ne sont
+  **jamais** supprimées. Le nombre de répétitions est seulement rapporté à
+  titre informatif dans `table_profiles.csv` (colonnes `*_key_repetitions`).
+
+Vérification empirique sur l'export Kaggle utilisé dans ce projet : aucune
+des tables brutes (`application_train`, `application_test`, `bureau`,
+`bureau_balance`, `previous_application`, `POS_CASH_balance`,
+`credit_card_balance`, `installments_payments`) ne contient de ligne
+strictement dupliquée. La suppression automatique reste néanmoins active
+comme filet de sécurité en cas de changement de source de données.
+
 Les valeurs manquantes ne sont pas supprimées massivement à ce stade. Leur
 signification et leur distribution sont documentées, puis leur imputation est
 réalisée dans le pipeline de preprocessing afin d'éviter toute fuite entre plis.
@@ -263,9 +287,17 @@ Module :
 | `extra_trees` | Arbres fortement randomisés | Diversité accrue des arbres |
 | `lightgbm` | Gradient boosting | Efficace sur données tabulaires |
 | `xgboost` | Gradient boosting | Alternative de boosting régularisée |
+| `mlp` | Réseau de neurones (`MLPClassifier`) | Sensible à l'échelle : une standardisation (`StandardScaler`) est insérée automatiquement dans son pipeline, contrairement aux modèles à base d'arbres |
 
 Chaque spécification contient une fabrique d'estimateur et une grille
-d'hyperparamètres compatible avec `GridSearchCV`.
+d'hyperparamètres compatible avec `GridSearchCV`. Le flag interne
+`requires_scaling` (porté par `ModelSpec`) déclenche cette standardisation
+uniquement pour les modèles qui en ont besoin ; les modèles à base d'arbres
+n'en sont pas affectés.
+
+Le MLP ne supporte pas nativement `class_weight` : le déséquilibre des
+classes doit être géré via une stratégie de sampling (`--sampling smote`,
+par exemple) plutôt que par pondération.
 
 ### 7.2 Stratégies de rééquilibrage
 
@@ -408,6 +440,15 @@ Sorties principales :
 L'analyse globale identifie les variables les plus influentes dans l'ensemble de
 la population. L'analyse locale explique pourquoi une probabilité élevée ou
 faible a été attribuée à un client particulier.
+
+L'explainer SHAP est choisi selon le type de modèle du meilleur candidat :
+`TreeExplainer` pour les modèles à base d'arbres/boosting, `LinearExplainer`
+pour les modèles linéaires, et un explainer générique (`shap.Explainer` sur
+`predict_proba`, plus lent mais borné par `--shap-sample-size`) pour les
+modèles sans structure interne exploitable comme le MLP. De même, si le
+meilleur candidat n'expose ni `feature_importances_` ni `coef_`, l'export
+d'importance native est simplement ignoré (avertissement en log) : l'importance
+globale reste disponible via les valeurs SHAP moyennes.
 
 ## 11. Phase 7 : reporting
 

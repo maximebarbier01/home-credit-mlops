@@ -153,6 +153,7 @@ poetry run python scripts/run_home_credit_experiment.py \
   --model extra_trees \
   --model lightgbm \
   --model xgboost \
+  --model mlp \
   --sampling baseline \
   --sampling smote \
   --sample-size 10000 \
@@ -166,7 +167,10 @@ Modèles disponibles :
 - `random_forest` ;
 - `extra_trees` ;
 - `lightgbm` ;
-- `xgboost`.
+- `xgboost` ;
+- `mlp` (réseau de neurones `MLPClassifier` ; standardisation automatique des
+  features en amont car, contrairement aux arbres, ce modèle est sensible à
+  l'échelle).
 
 Stratégies de rééquilibrage disponibles :
 

@@ -33,6 +33,7 @@ from sklearn.model_selection import (
     train_test_split,
 )
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from home_credit_mlops.data.io import read_table
 from home_credit_mlops.features.preprocessing import build_preprocessor, split_features_target
@@ -197,10 +198,19 @@ def build_model_pipeline(
     model = model_spec.estimator_factory()
     sampling_steps = _build_sampling_steps(model_spec, settings)
 
+    # with_mean=False car le preprocessing produit une matrice creuse
+    # (OneHotEncoder sparse) : on ne recentre pas, on ramene juste a
+    # variance unitaire, ce qui suffit pour les modeles sensibles a
+    # l'echelle comme le MLP.
+    scaling_steps: list[tuple[str, Any]] = (
+        [("scaler", StandardScaler(with_mean=False))] if model_spec.requires_scaling else []
+    )
+
     if sampling_steps:
         return ImbPipeline(
             steps=[
                 ("preprocessor", preprocessor),
+                *scaling_steps,
                 *sampling_steps,
                 ("model", model),
             ]
@@ -209,6 +219,7 @@ def build_model_pipeline(
     return Pipeline(
         steps=[
             ("preprocessor", preprocessor),
+            *scaling_steps,
             ("model", model),
         ]
     )

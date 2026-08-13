@@ -3,7 +3,9 @@ import pandas as pd
 
 from home_credit_mlops.data.home_credit import (
     clean_application_data,
+    collect_table_profile,
     flatten_groupby_columns,
+    load_raw_table,
     safe_ratio,
 )
 
@@ -71,3 +73,46 @@ def test_clean_application_data_replaces_anomalies_and_creates_features() -> Non
     assert result.loc[0, "DOCUMENT_COUNT"] == 1
     assert result.loc[0, "PHONE_FLAG_COUNT"] == 4
     assert result.loc[0, "ADDRESS_MISMATCH_COUNT"] == 3
+
+
+def test_load_raw_table_drops_exact_duplicate_rows_but_keeps_repeated_keys(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "SK_ID_CURR": [1, 1, 2],
+            "SK_ID_PREV": [10, 11, 20],
+            "AMT_CREDIT": [100.0, 150.0, 200.0],
+        }
+    )
+    # SK_ID_CURR=1 apparait deux fois pour deux credits differents
+    # (repetition legitime, a conserver) ; on ajoute en plus une vraie
+    # ligne dupliquee (doublon de saisie) a supprimer.
+    frame = pd.concat([frame, frame.iloc[[0]]], ignore_index=True)
+    frame.to_csv(tmp_path / "toy.csv", index=False)
+
+    loaded, n_duplicates = load_raw_table(tmp_path, "toy.csv")
+
+    assert n_duplicates == 1
+    assert len(loaded) == 3
+    assert loaded["SK_ID_CURR"].tolist() == [1, 1, 2]
+
+
+def test_load_raw_table_reports_zero_when_no_duplicates(tmp_path) -> None:
+    frame = pd.DataFrame({"SK_ID_CURR": [1, 2, 3], "AMT_CREDIT": [10.0, 20.0, 30.0]})
+    frame.to_csv(tmp_path / "toy.csv", index=False)
+
+    loaded, n_duplicates = load_raw_table(tmp_path, "toy.csv")
+
+    assert n_duplicates == 0
+    assert len(loaded) == 3
+
+
+def test_collect_table_profile_separates_full_duplicates_from_key_repetition() -> None:
+    frame = pd.DataFrame({"SK_ID_CURR": [1, 1, 2], "SK_ID_BUREAU": [100, 101, 102]})
+
+    profile = collect_table_profile(frame, "bureau.csv", full_row_duplicates_removed=0)
+
+    # SK_ID_CURR se repete legitimement (plusieurs credits par client) :
+    # ce n'est pas un doublon de saisie.
+    assert profile["sk_id_curr_key_repetitions"] == 1
+    assert profile["sk_id_bureau_key_repetitions"] == 0
+    assert profile["full_row_duplicates_removed"] == 0
