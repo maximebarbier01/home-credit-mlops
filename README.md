@@ -204,9 +204,12 @@ d'hyperparamètres :
 poetry run python scripts/register_champion_model.py
 ```
 
-Ce script réentraîne uniquement le champion connu (`lightgbm + smote`) sur le
-dataset préparé, applique le seuil métier `0.220331353025222`, puis enregistre
-une version servable dans `home-credit-scoring`.
+Ce script relit automatiquement le champion (modèle, hyperparamètres, seuil
+métier) depuis les artefacts de la dernière campagne (`campaign_metadata.json`),
+réentraîne une seule fois sur le dataset préparé, puis enregistre une version
+servable dans `home-credit-scoring`. Voir
+[docs/mode_emploi_pipeline_ml.md](docs/mode_emploi_pipeline_ml.md#123-model-registry)
+pour les options de sélection de campagne source.
 
 ## Protocole d'évaluation
 

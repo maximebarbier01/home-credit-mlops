@@ -26,26 +26,52 @@ from home_credit_mlops.settings import Settings, load_settings
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_REGISTERED_MODEL_NAME = "home-credit-scoring"
-DEFAULT_MODEL_NAME = "lightgbm"
-DEFAULT_SAMPLING_STRATEGY = "smote"
-
-# Champion retenu lors du run complet LightGBM + SMOTE CV5.
-DEFAULT_CHAMPION_THRESHOLDS: dict[tuple[str, str], float] = {
-    ("lightgbm", "smote"): 0.220331353025222,
-}
-DEFAULT_CHAMPION_PARAMS: dict[tuple[str, str], dict[str, Any]] = {
-    ("lightgbm", "smote"): {
-        "model__learning_rate": 0.03,
-        "model__n_estimators": 500,
-        "model__num_leaves": 63,
-    },
-}
+DEFAULT_SOURCE_CAMPAIGN = "lgbm_smote_full_cv5"
+REPORTS_ROOT = Path("reports")
 
 
 def _candidate_name(model_name: str, sampling_strategy: str) -> str:
     if sampling_strategy == "baseline":
         return model_name
     return f"{model_name}__{sampling_strategy}"
+
+
+def _find_latest_campaign_metadata(reports_root: Path, campaign_name: str) -> Path | None:
+    """Retrouve le campaign_metadata.json le plus recent pour cette campagne.
+
+    Chaque run de campagne (`run_home_credit_experiment.py`) ecrit un
+    `campaign_metadata.json` contenant le champion retenu (seuil metier et
+    meilleurs hyperparametres). On evite ainsi de dupliquer ces valeurs en
+    dur ici, ce qui les desynchroniserait silencieusement d'une prochaine
+    campagne.
+    """
+    candidates: list[tuple[str, Path]] = []
+    for metadata_path in reports_root.glob("*/*/campaign_metadata.json"):
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if metadata.get("campaign_name") != campaign_name or "best_model" not in metadata:
+            continue
+        candidates.append((str(metadata.get("created_at", "")), metadata_path))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[-1][1]
+
+
+def _load_champion_from_campaign(metadata_path: Path) -> dict[str, Any]:
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    best_model = metadata["best_model"]
+    return {
+        "model_name": best_model["base_model_name"],
+        "sampling_strategy": best_model["sampling_strategy"],
+        "threshold": float(best_model["threshold"]),
+        "params": dict(best_model["best_params"]),
+        "campaign_name": metadata.get("campaign_name"),
+        "source_path": metadata_path.as_posix(),
+    }
 
 
 def _parse_param_value(value: str) -> Any:
@@ -116,9 +142,22 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target", default=None)
     parser.add_argument("--id-column", default=None)
     parser.add_argument("--drop-column", action="append", default=[])
-    parser.add_argument("--model", default=DEFAULT_MODEL_NAME)
-    parser.add_argument("--sampling", default=DEFAULT_SAMPLING_STRATEGY)
-    parser.add_argument("--business-threshold", type=float, default=None)
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Override the base model name. Defaults to the champion found in campaign artifacts.",
+    )
+    parser.add_argument(
+        "--sampling",
+        default=None,
+        help="Override the sampling strategy. Defaults to the champion found in campaign artifacts.",
+    )
+    parser.add_argument(
+        "--business-threshold",
+        type=float,
+        default=None,
+        help="Override the business threshold. Defaults to the one found in campaign artifacts.",
+    )
     parser.add_argument(
         "--param",
         action="append",
@@ -131,28 +170,43 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         default=DEFAULT_REGISTERED_MODEL_NAME,
         help="MLflow registered model name.",
     )
-    parser.add_argument("--source-campaign", default="lgbm_smote_full_cv5")
     parser.add_argument(
-        "--source-report",
-        default="reports/20260711_home_credit_experiments/20260711_190340_lgbm_smote_full_cv5/summary.xlsx",
+        "--source-campaign",
+        default=DEFAULT_SOURCE_CAMPAIGN,
+        help="Campaign name whose most recent campaign_metadata.json is used as champion source.",
+    )
+    parser.add_argument(
+        "--source-report-dir",
+        default=None,
+        help=(
+            "Explicit path to a campaign report directory (containing "
+            "campaign_metadata.json). Overrides --source-campaign auto-discovery."
+        ),
     )
     return parser
 
 
 def _resolve_champion_params(
     *,
+    champion_from_campaign: dict[str, Any] | None,
     model_name: str,
     sampling_strategy: str,
     raw_param_overrides: list[str],
 ) -> dict[str, Any]:
-    key = (model_name, sampling_strategy)
-    params = dict(DEFAULT_CHAMPION_PARAMS.get(key, {}))
+    params: dict[str, Any] = {}
+    if (
+        champion_from_campaign is not None
+        and champion_from_campaign["model_name"] == model_name
+        and champion_from_campaign["sampling_strategy"] == sampling_strategy
+    ):
+        params.update(champion_from_campaign["params"])
     params.update(_parse_param_overrides(raw_param_overrides))
     return params
 
 
 def _resolve_threshold(
     *,
+    champion_from_campaign: dict[str, Any] | None,
     model_name: str,
     sampling_strategy: str,
     business_threshold: float | None,
@@ -161,13 +215,17 @@ def _resolve_threshold(
     if business_threshold is not None:
         return business_threshold
 
-    key = (model_name, sampling_strategy)
-    if key in DEFAULT_CHAMPION_THRESHOLDS:
-        return DEFAULT_CHAMPION_THRESHOLDS[key]
+    if (
+        champion_from_campaign is not None
+        and champion_from_campaign["model_name"] == model_name
+        and champion_from_campaign["sampling_strategy"] == sampling_strategy
+    ):
+        return champion_from_campaign["threshold"]
 
     parser.error(
-        "No default threshold is known for this model/sampling pair. "
-        "Provide --business-threshold."
+        f"No known business threshold for {model_name}/{sampling_strategy}. Provide "
+        "--business-threshold, or point --source-campaign/--source-report-dir to a "
+        "campaign whose champion matches this model/sampling."
     )
     raise AssertionError("unreachable")
 
@@ -180,18 +238,52 @@ def main() -> None:
     settings = load_settings(args.config)
     configure_mlflow(settings)
 
-    model_name = args.model
-    sampling_strategy = args.sampling
+    source_metadata_path = (
+        Path(args.source_report_dir) / "campaign_metadata.json"
+        if args.source_report_dir
+        else _find_latest_campaign_metadata(REPORTS_ROOT, args.source_campaign)
+    )
+    champion_from_campaign: dict[str, Any] | None = None
+    if source_metadata_path is not None and source_metadata_path.exists():
+        champion_from_campaign = _load_champion_from_campaign(source_metadata_path)
+        LOGGER.info(
+            "Champion artifacts found in %s (model=%s, sampling=%s, threshold=%s)",
+            champion_from_campaign["source_path"],
+            champion_from_campaign["model_name"],
+            champion_from_campaign["sampling_strategy"],
+            champion_from_campaign["threshold"],
+        )
+    else:
+        LOGGER.warning(
+            "No campaign_metadata.json found for campaign %r under %s ; "
+            "falling back to explicit --model/--sampling/--business-threshold/--param.",
+            args.source_campaign,
+            REPORTS_ROOT,
+        )
+
+    model_name = args.model or (champion_from_campaign["model_name"] if champion_from_campaign else None)
+    sampling_strategy = args.sampling or (
+        champion_from_campaign["sampling_strategy"] if champion_from_campaign else None
+    )
+    if model_name is None or sampling_strategy is None:
+        parser.error(
+            "Could not resolve a champion model/sampling from campaign artifacts. "
+            "Provide --model and --sampling explicitly, or point --source-campaign / "
+            "--source-report-dir to a valid campaign report."
+        )
+
     target_column = args.target or settings.dataset.target_column
     id_column = args.id_column or settings.dataset.id_column
     data_path = _resolve_data_path(settings, args.data)
     threshold = _resolve_threshold(
+        champion_from_campaign=champion_from_campaign,
         model_name=model_name,
         sampling_strategy=sampling_strategy,
         business_threshold=args.business_threshold,
         parser=parser,
     )
     pipeline_params = _resolve_champion_params(
+        champion_from_campaign=champion_from_campaign,
         model_name=model_name,
         sampling_strategy=sampling_strategy,
         raw_param_overrides=args.param,
@@ -219,7 +311,7 @@ def main() -> None:
         len(features),
         features.shape[1],
     )
-    pipeline = build_model_pipeline(model_spec, features, settings)
+    pipeline = build_model_pipeline(model_spec, features, target, settings)
     if pipeline_params:
         pipeline.set_params(**pipeline_params)
     pipeline.fit(features, target)
@@ -255,7 +347,9 @@ def main() -> None:
                 "business_threshold": threshold,
                 "fn_cost": settings.business.fn_cost,
                 "fp_cost": settings.business.fp_cost,
-                "source_report": args.source_report,
+                "source_report": (
+                    champion_from_campaign["source_path"] if champion_from_campaign else "manual_override"
+                ),
                 **pipeline_params,
             }
         )
@@ -273,7 +367,9 @@ def main() -> None:
                 "business_threshold": threshold,
                 "pipeline_params": pipeline_params,
                 "source_campaign": args.source_campaign,
-                "source_report": args.source_report,
+                "source_report": (
+                    champion_from_campaign["source_path"] if champion_from_campaign else "manual_override"
+                ),
                 "response_example": json.loads(output_example.to_json(orient="records")),
             },
             "champion_registration_summary.json",

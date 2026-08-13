@@ -286,7 +286,7 @@ Module :
 | `random_forest` | Bagging d'arbres | Non-linéarités et interactions |
 | `extra_trees` | Arbres fortement randomisés | Diversité accrue des arbres |
 | `lightgbm` | Gradient boosting | Efficace sur données tabulaires |
-| `xgboost` | Gradient boosting | Alternative de boosting régularisée |
+| `xgboost` | Gradient boosting | Alternative de boosting régularisée ; `scale_pos_weight` calculé dynamiquement (voir ci-dessous) |
 | `mlp` | Réseau de neurones (`MLPClassifier`) | Sensible à l'échelle : une standardisation (`StandardScaler`) est insérée automatiquement dans son pipeline, contrairement aux modèles à base d'arbres |
 
 Chaque spécification contient une fabrique d'estimateur et une grille
@@ -294,6 +294,23 @@ d'hyperparamètres compatible avec `GridSearchCV`. Le flag interne
 `requires_scaling` (porté par `ModelSpec`) déclenche cette standardisation
 uniquement pour les modèles qui en ont besoin ; les modèles à base d'arbres
 n'en sont pas affectés.
+
+#### Cas particulier XGBoost : `scale_pos_weight`
+
+Contrairement aux autres modèles, `XGBClassifier` ne supporte pas
+`class_weight`. Sans correction, il tournait donc sans aucune gestion du
+déséquilibre en sampling `baseline`, contrairement à tous les autres
+candidats — un biais dans la comparaison entre modèles.
+
+`ModelSpec.scale_pos_weight_param` (renseigné à `"scale_pos_weight"` pour
+XGBoost) déclenche, dans `build_model_pipeline`, le calcul du ratio
+négatifs/positifs sur le `target` d'entraînement, appliqué au modèle avant
+le fit. Ce calcul n'est effectué **qu'en sampling `baseline`** : dès qu'un
+sur-échantillonnage (SMOTE, ADASYN...) tourne dans le pipeline, les classes
+vues par le modèle sont déjà quasi équilibrées, et figer `scale_pos_weight`
+sur le ratio d'origine ferait double correction. Les autres modèles n'ont
+pas ce problème car `class_weight="balanced"` est recalculé par scikit-learn
+au moment du fit, donc automatiquement sur les données déjà rééquilibrées.
 
 Le MLP ne supporte pas nativement `class_weight` : le déséquilibre des
 classes doit être géré via une stratégie de sampling (`--sampling smote`,
@@ -545,11 +562,29 @@ version servable sans relancer toute la validation croisée :
 poetry run python scripts/register_champion_model.py
 ```
 
-Ce point d'entrée reprend le champion validé (`lightgbm + smote`), ses meilleurs
-hyperparamètres, le seuil métier `0.220331353025222`, puis réentraîne le pipeline
-une seule fois sur le dataset préparé. La version créée dans MLflow contient la
-réponse métier complète : probabilité de défaut, seuil, classe prédite et
-décision de crédit.
+Ce point d'entrée réentraîne le pipeline une seule fois sur le dataset préparé.
+La version créée dans MLflow contient la réponse métier complète : probabilité
+de défaut, seuil, classe prédite et décision de crédit.
+
+Le modèle, ses meilleurs hyperparamètres et le seuil métier ne sont **plus
+codés en dur** dans le script : ils sont lus automatiquement depuis le
+`campaign_metadata.json` le plus récent de la campagne `--source-campaign`
+(par défaut `lgbm_smote_full_cv5`), généré par
+`run_home_credit_experiment.py` à chaque campagne. Cela évite qu'une nouvelle
+campagne complète désynchronise silencieusement ce script des valeurs
+réellement trouvées par le dernier GridSearch.
+
+Options utiles :
+
+- `--source-campaign <nom>` : choisit la campagne dont le champion le plus
+  récent doit être repris (recherche dans `reports/*/*/campaign_metadata.json`,
+  tri par date de création) ;
+- `--source-report-dir <chemin>` : pointe explicitement vers un dossier de
+  rapport de campagne, pour figer une version précise plutôt que la plus
+  récente ;
+- `--model`, `--sampling`, `--business-threshold`, `--param` : surchargent
+  individuellement la valeur trouvée dans les artefacts (utile si aucune
+  campagne correspondante n'est trouvée, ou pour forcer un autre candidat).
 
 ### 12.4 Interface web
 

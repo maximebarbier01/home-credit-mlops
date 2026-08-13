@@ -33,6 +33,11 @@ class ModelSpec:
     # Le MLP (et tout futur modele sensible a l'echelle) a besoin d'une
     # standardisation explicite : les arbres/boosting s'en passent.
     requires_scaling: bool = False
+    # Nom du parametre de l'estimateur a renseigner avec le ratio
+    # negatif/positif du target (ex. "scale_pos_weight" pour XGBoost, qui
+    # ne supporte pas class_weight nativement). None si le modele gere
+    # deja le desequilibre autrement (class_weight, ou aucun mecanisme).
+    scale_pos_weight_param: str | None = None
 
 
 def get_model_specs() -> dict[str, ModelSpec]:
@@ -128,6 +133,7 @@ def get_model_specs() -> dict[str, ModelSpec]:
                     "model__max_depth": [4, 6],
                 }
             ],
+            scale_pos_weight_param="scale_pos_weight",
         ),
         "mlp": ModelSpec(
             name="mlp",
@@ -188,5 +194,6 @@ def build_candidate_model_specs(
                 param_grid=base_spec.param_grid,
                 sampling_strategy=sampling_strategy,
                 requires_scaling=base_spec.requires_scaling,
+                scale_pos_weight_param=base_spec.scale_pos_weight_param,
             )
     return candidates

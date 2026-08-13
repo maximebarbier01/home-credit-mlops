@@ -71,12 +71,13 @@ def test_build_pipeline_inserts_scaler_only_for_models_that_require_it() -> None
             "cat": ["a", "b", "a", "b", "a", "c"],
         }
     )
+    target = pd.Series([0, 0, 0, 0, 1, 1])
     settings = load_settings()
     specs = build_candidate_model_specs(["lightgbm", "mlp"], ["baseline", "smote"])
 
-    lightgbm_pipeline = _build_pipeline(specs["lightgbm"], features, settings)
-    mlp_pipeline = _build_pipeline(specs["mlp"], features, settings)
-    mlp_smote_pipeline = _build_pipeline(specs["mlp__smote"], features, settings)
+    lightgbm_pipeline = _build_pipeline(specs["lightgbm"], features, target, settings)
+    mlp_pipeline = _build_pipeline(specs["mlp"], features, target, settings)
+    mlp_smote_pipeline = _build_pipeline(specs["mlp__smote"], features, target, settings)
 
     assert "scaler" not in lightgbm_pipeline.named_steps
     assert "scaler" in mlp_pipeline.named_steps
@@ -109,6 +110,28 @@ def test_xgboost_is_available_with_safe_parallelism() -> None:
     ]
 
 
+def test_xgboost_scale_pos_weight_set_only_in_baseline_sampling() -> None:
+    features = pd.DataFrame(
+        {
+            "num": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            "cat": ["a", "b", "a", "b", "a", "c", "a", "b", "a", "c"],
+        }
+    )
+    # 8 negatifs, 2 positifs -> ratio attendu = 4.0
+    target = pd.Series([0, 0, 0, 0, 0, 0, 0, 0, 1, 1])
+    settings = load_settings()
+    specs = build_candidate_model_specs(["xgboost"], ["baseline", "smote"])
+
+    baseline_pipeline = _build_pipeline(specs["xgboost"], features, target, settings)
+    smote_pipeline = _build_pipeline(specs["xgboost__smote"], features, target, settings)
+
+    assert baseline_pipeline.named_steps["model"].scale_pos_weight == 4.0
+    # En sampling smote, les classes sont deja rééquilibrees par le
+    # sampler : scale_pos_weight ne doit pas etre force, sous peine de
+    # double correction.
+    assert smote_pipeline.named_steps["model"].scale_pos_weight is None
+
+
 def test_build_pipeline_uses_expected_sampling_steps() -> None:
     features = pd.DataFrame(
         {
@@ -116,17 +139,22 @@ def test_build_pipeline_uses_expected_sampling_steps() -> None:
             "cat": ["a", "b", "a", "b", "a", "c"],
         }
     )
+    target = pd.Series([0, 0, 0, 0, 1, 1])
     settings = load_settings()
     specs = build_candidate_model_specs(
         ["lightgbm"],
         ["baseline", "smote", "borderline_smote", "adasyn", "smote_under"],
     )
 
-    baseline_pipeline = _build_pipeline(specs["lightgbm"], features, settings)
-    smote_pipeline = _build_pipeline(specs["lightgbm__smote"], features, settings)
-    borderline_pipeline = _build_pipeline(specs["lightgbm__borderline_smote"], features, settings)
-    adasyn_pipeline = _build_pipeline(specs["lightgbm__adasyn"], features, settings)
-    smote_under_pipeline = _build_pipeline(specs["lightgbm__smote_under"], features, settings)
+    baseline_pipeline = _build_pipeline(specs["lightgbm"], features, target, settings)
+    smote_pipeline = _build_pipeline(specs["lightgbm__smote"], features, target, settings)
+    borderline_pipeline = _build_pipeline(
+        specs["lightgbm__borderline_smote"], features, target, settings
+    )
+    adasyn_pipeline = _build_pipeline(specs["lightgbm__adasyn"], features, target, settings)
+    smote_under_pipeline = _build_pipeline(
+        specs["lightgbm__smote_under"], features, target, settings
+    )
 
     assert isinstance(baseline_pipeline, Pipeline)
     assert isinstance(smote_pipeline, ImbPipeline)

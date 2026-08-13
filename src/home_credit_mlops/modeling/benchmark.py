@@ -190,12 +190,28 @@ def _build_sampling_steps(
 def build_model_pipeline(
     model_spec: ModelSpec,
     features: pd.DataFrame,
+    target: pd.Series,
     settings: Settings,
 ) -> Pipeline | ImbPipeline:
     """Construit le pipeline modele complet, avec preprocessing et sampling."""
 
     preprocessor, _, _ = build_preprocessor(features)
     model = model_spec.estimator_factory()
+
+    # XGBoost ne supporte pas class_weight nativement : on renseigne
+    # scale_pos_weight avec le ratio negatif/positif du target, calcule
+    # sur les donnees d'origine. Seulement en sampling "baseline" : des
+    # qu'un sur-echantillonnage (SMOTE...) tourne dans le pipeline, les
+    # classes vues par le modele sont deja quasi equilibrees, et ce ratio
+    # fige ferait double emploi (contrairement a class_weight="balanced",
+    # recalcule dynamiquement par les autres modeles au fit sur les
+    # donnees deja rééchantillonnées).
+    if model_spec.scale_pos_weight_param and model_spec.sampling_strategy == "baseline":
+        positive_count = int((target == 1).sum())
+        negative_count = int((target == 0).sum())
+        scale_pos_weight = negative_count / max(positive_count, 1)
+        model.set_params(**{model_spec.scale_pos_weight_param: scale_pos_weight})
+
     sampling_steps = _build_sampling_steps(model_spec, settings)
 
     # with_mean=False car le preprocessing produit une matrice creuse
@@ -228,9 +244,10 @@ def build_model_pipeline(
 def _build_pipeline(
     model_spec: ModelSpec,
     features: pd.DataFrame,
+    target: pd.Series,
     settings: Settings,
 ) -> Pipeline | ImbPipeline:
-    return build_model_pipeline(model_spec, features, settings)
+    return build_model_pipeline(model_spec, features, target, settings)
 
 
 def _sample_training_frame(
@@ -1090,7 +1107,7 @@ def _benchmark_single_model(
     cv_folds: int,
     output_dir: Path,
 ) -> ModelBenchmarkArtifacts:
-    pipeline = _build_pipeline(model_spec, x_train, settings)
+    pipeline = _build_pipeline(model_spec, x_train, y_train, settings)
     cv = StratifiedKFold(
         n_splits=cv_folds,
         shuffle=True,
@@ -1421,7 +1438,7 @@ def _run_benchmark_body(
 
     # Une fois le meilleur candidat identifie, on le refit sur toutes
     # les donnees disponibles avant interpretabilite et eventuel registry.
-    final_pipeline = _build_pipeline(best_model_spec, features, settings)
+    final_pipeline = _build_pipeline(best_model_spec, features, target, settings)
     final_pipeline.set_params(**best_result.best_params)
     final_pipeline.fit(features, target)
 
