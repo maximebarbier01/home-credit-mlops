@@ -211,6 +211,24 @@ servable dans `home-credit-scoring`. Voir
 [docs/mode_emploi_pipeline_ml.md](docs/mode_emploi_pipeline_ml.md#123-model-registry)
 pour les options de sélection de campagne source.
 
+### 5. Analyser la fairness du champion
+
+```bash
+poetry run python scripts/analyze_fairness.py --source-campaign lgbm_smote_full_cv5
+```
+
+Relit les prédictions holdout déjà produites par la campagne (sans rien
+réentraîner), les joint à `CODE_GENDER` et `AGE_YEARS`, puis calcule par
+groupe le taux de sélection, le recall, le taux de faux positifs et le coût
+métier, ainsi que deux indicateurs de disparité (`disparate_impact_ratio`,
+règle des 4/5e ; `equal_opportunity_difference`). Rapport écrit dans
+`<dossier_campagne>/fairness/` (CSV, graphiques, `fairness.xlsx`). Sur le
+champion actuel, l'analyse remonte des écarts significatifs par genre et par
+tranche d'âge, non encore traités — voir
+[docs/mode_emploi_pipeline_ml.md](docs/mode_emploi_pipeline_ml.md#14-phase-9bis--analyse-de-fairness-biais)
+pour le détail des métriques et leurs limites (pas de croisement genre × âge,
+pas de precision/F1/ROC AUC par groupe).
+
 ## Protocole d'évaluation
 
 1. Un holdout stratifié de 20 % est isolé avant l'entraînement.
@@ -342,7 +360,9 @@ la décision `approved`.
 
 ## Qualité et limites
 
-Contrôles disponibles :
+Contrôles disponibles (exécutés automatiquement en CI, voir
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml), sur chaque push et
+pull request vers `main`) :
 
 ```bash
 poetry run ruff check scripts src tests
@@ -353,5 +373,7 @@ Limites à conserver dans l'analyse :
 
 - le rapport de coût `FN/FP = 10` constitue une hypothèse pédagogique à valider avec le métier ;
 - le tracking et le registry reposent actuellement sur une infrastructure locale ;
-- la surveillance en production, la dérive des données et la CI/CD restent hors du périmètre actuel ;
-- les artefacts locaux et les données brutes ne sont pas stockés dans Git.
+- la surveillance en production et la dérive des données restent hors du périmètre actuel ;
+- les artefacts locaux et les données brutes ne sont pas stockés dans Git ;
+- l'analyse de fairness (`scripts/analyze_fairness.py`) remonte des écarts significatifs par
+  genre et par tranche d'âge sur le champion actuel, non encore traités.

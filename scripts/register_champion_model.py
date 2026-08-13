@@ -20,6 +20,10 @@ from home_credit_mlops.mlflow_utils import configure_mlflow, register_logged_mod
 from home_credit_mlops.modeling.benchmark import build_model_pipeline
 from home_credit_mlops.modeling.candidates import build_candidate_model_specs
 from home_credit_mlops.modeling.serving import CreditScoringModel
+from home_credit_mlops.reporting.campaign_lookup import (
+    find_latest_campaign_metadata,
+    load_champion_from_campaign,
+)
 from home_credit_mlops.settings import Settings, load_settings
 
 
@@ -34,44 +38,6 @@ def _candidate_name(model_name: str, sampling_strategy: str) -> str:
     if sampling_strategy == "baseline":
         return model_name
     return f"{model_name}__{sampling_strategy}"
-
-
-def _find_latest_campaign_metadata(reports_root: Path, campaign_name: str) -> Path | None:
-    """Retrouve le campaign_metadata.json le plus recent pour cette campagne.
-
-    Chaque run de campagne (`run_home_credit_experiment.py`) ecrit un
-    `campaign_metadata.json` contenant le champion retenu (seuil metier et
-    meilleurs hyperparametres). On evite ainsi de dupliquer ces valeurs en
-    dur ici, ce qui les desynchroniserait silencieusement d'une prochaine
-    campagne.
-    """
-    candidates: list[tuple[str, Path]] = []
-    for metadata_path in reports_root.glob("*/*/campaign_metadata.json"):
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if metadata.get("campaign_name") != campaign_name or "best_model" not in metadata:
-            continue
-        candidates.append((str(metadata.get("created_at", "")), metadata_path))
-
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: item[0])
-    return candidates[-1][1]
-
-
-def _load_champion_from_campaign(metadata_path: Path) -> dict[str, Any]:
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    best_model = metadata["best_model"]
-    return {
-        "model_name": best_model["base_model_name"],
-        "sampling_strategy": best_model["sampling_strategy"],
-        "threshold": float(best_model["threshold"]),
-        "params": dict(best_model["best_params"]),
-        "campaign_name": metadata.get("campaign_name"),
-        "source_path": metadata_path.as_posix(),
-    }
 
 
 def _parse_param_value(value: str) -> Any:
@@ -241,11 +207,11 @@ def main() -> None:
     source_metadata_path = (
         Path(args.source_report_dir) / "campaign_metadata.json"
         if args.source_report_dir
-        else _find_latest_campaign_metadata(REPORTS_ROOT, args.source_campaign)
+        else find_latest_campaign_metadata(REPORTS_ROOT, args.source_campaign)
     )
     champion_from_campaign: dict[str, Any] | None = None
     if source_metadata_path is not None and source_metadata_path.exists():
-        champion_from_campaign = _load_champion_from_campaign(source_metadata_path)
+        champion_from_campaign = load_champion_from_campaign(source_metadata_path)
         LOGGER.info(
             "Champion artifacts found in %s (model=%s, sampling=%s, threshold=%s)",
             champion_from_campaign["source_path"],

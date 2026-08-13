@@ -668,7 +668,77 @@ Le tableau `predictions` contient une réponse par ligne d'entrée. Les champs
 `refused` et `approved` fournissent une représentation directement exploitable
 par une future API métier.
 
-## 14. Nomenclature fichier par fichier
+## 14. Phase 9bis : analyse de fairness (biais)
+
+Module :
+[`src/home_credit_mlops/fairness/`](../src/home_credit_mlops/fairness/) —
+`metrics.py` (calcul) et `report.py` (export CSV/PNG/xlsx, même style que
+`modeling/interpretability.py`).
+
+Point d'entrée :
+
+```bash
+poetry run python scripts/analyze_fairness.py --source-campaign lgbm_smote_full_cv5
+```
+
+### 14.1 Principe
+
+Ce script ne relance rien : il relit les prédictions holdout déjà produites
+par une campagne (`predictions/<candidat>_holdout_predictions.parquet`,
+colonnes `SK_ID_CURR, TARGET, probability, prediction`), les joint sur
+`SK_ID_CURR` avec `CODE_GENDER` et `AGE_YEARS` du dataset de features, puis
+calcule des métriques par groupe au seuil métier déjà retenu par le
+champion. Il suit exactement le même principe de découverte que
+`register_champion_model.py` — retrouver le `campaign_metadata.json` le
+plus récent d'une campagne (`--source-campaign`, ou `--source-report-dir`
+pour un dossier précis) — via le module partagé
+[`src/home_credit_mlops/reporting/campaign_lookup.py`](../src/home_credit_mlops/reporting/campaign_lookup.py).
+
+### 14.2 Attributs sensibles et bandes d'âge
+
+Deux attributs sont analysés indépendamment : `CODE_GENDER` ("M"/"F", les
+lignes sans genre connu sont exclues sans imputation) et une tranche d'âge
+dérivée d'`AGE_YEARS`, découpée en décennies fixes (`20-29`, `30-39`,
+`40-49`, `50-59`, `60+`). Des bandes fixes plutôt que des quantiles :
+les bornes ne changent pas d'une campagne à l'autre, ce qui permet de
+comparer la fairness dans le temps.
+
+### 14.3 Métriques
+
+| Métrique | Définition | Pourquoi |
+|---|---|---|
+| `selection_rate` | part du groupe prédite "défaut" (donc refusée) | proxy direct du taux d'approbation, base de la règle des 4/5e |
+| `recall` | recall sur `TARGET=1` dans le groupe | part des mauvais payeurs détectés — lié au coût FN×10 du projet |
+| `fpr` | taux de faux positifs dans le groupe | bons payeurs refusés à tort — lié au coût FP du projet |
+| `business_cost` | même formule que `modeling/metrics.business_cost`, par groupe | relie la fairness au critère de décision du projet |
+| `disparate_impact_ratio` | `min(selection_rate) / max(selection_rate)`, flag si `< 0.8` | règle des 4/5e, seuil standard non arbitraire |
+| `equal_opportunity_difference` | `max(recall) - min(recall)` entre groupes | complète le disparate impact sur l'angle recall |
+
+Volontairement exclus : precision/F1/ROC AUC par groupe (peu de lecture
+métier pour une décision binaire à seuil) et le croisement genre × âge
+(effectifs du holdout trop faibles par cellule pour des ratios stables —
+limite connue, documentée dans `fairness_metadata.json`, pas un oubli).
+
+### 14.4 Sorties
+
+Écrites dans `<dossier_campagne>/fairness/` : `fairness_by_gender.csv`,
+`fairness_by_age_band.csv`, `fairness_summary.csv`, `fairness_metadata.json`,
+8 graphiques (un par attribut × métrique), regroupés dans `fairness.xlsx`
+via le même mécanisme que les autres rapports
+([`reporting/excel.py`](../src/home_credit_mlops/reporting/excel.py)).
+
+### 14.5 Constat sur le champion actuel
+
+Exécuté sur le champion `lightgbm__smote` (campagne `lgbm_smote_full_cv5`),
+l'analyse remonte des écarts significatifs à surveiller : disparate impact
+ratio ≈ 0.64 par genre et ≈ 0.31 par tranche d'âge (les deux en dessous du
+seuil de 0.8), avec un equal opportunity difference notable entre les
+tranches d'âge extrêmes. Ce constat n'a pas encore été traité (ex.
+recalibration du seuil par groupe, revue des features corrélées à l'âge) —
+à documenter comme limite connue du champion actuel plutôt que comme un
+problème résolu.
+
+## 15. Nomenclature fichier par fichier
 
 ### Points d'entrée
 
@@ -677,6 +747,7 @@ par une future API métier.
 | [`scripts/build_home_credit_dataset.py`](../scripts/build_home_credit_dataset.py) | Lance la préparation et l'EDA |
 | [`scripts/run_home_credit_experiment.py`](../scripts/run_home_credit_experiment.py) | Lance une campagne de benchmark |
 | [`scripts/register_champion_model.py`](../scripts/register_champion_model.py) | Réentraîne et enregistre rapidement le champion MLflow |
+| [`scripts/analyze_fairness.py`](../scripts/analyze_fairness.py) | Analyse la fairness (genre, tranche d'âge) du champion d'une campagne |
 | [`scripts/mlflow_ui.py`](../scripts/mlflow_ui.py) | Lance l'interface MLflow locale |
 
 ### Socle applicatif
@@ -686,6 +757,7 @@ par une future API métier.
 | [`src/home_credit_mlops/settings.py`](../src/home_credit_mlops/settings.py) | Charge et type la configuration TOML |
 | [`src/home_credit_mlops/logging_utils.py`](../src/home_credit_mlops/logging_utils.py) | Configure les logs Python |
 | [`src/home_credit_mlops/mlflow_utils.py`](../src/home_credit_mlops/mlflow_utils.py) | Configure MLflow, le registry et l'UI |
+| [`src/home_credit_mlops/reporting/campaign_lookup.py`](../src/home_credit_mlops/reporting/campaign_lookup.py) | Retrouve le champion d'une campagne depuis `campaign_metadata.json` |
 
 ### Données et EDA
 
@@ -706,20 +778,26 @@ par une future API métier.
 | [`src/home_credit_mlops/modeling/benchmark.py`](../src/home_credit_mlops/modeling/benchmark.py) | Orchestre entraînement, sélection et exports |
 | [`src/home_credit_mlops/modeling/interpretability.py`](../src/home_credit_mlops/modeling/interpretability.py) | Produit feature importance et SHAP |
 | [`src/home_credit_mlops/modeling/serving.py`](../src/home_credit_mlops/modeling/serving.py) | Retourne probabilité, seuil et décision métier |
+| [`src/home_credit_mlops/fairness/metrics.py`](../src/home_credit_mlops/fairness/metrics.py) | Calcule les métriques de fairness par groupe sensible |
+| [`src/home_credit_mlops/fairness/report.py`](../src/home_credit_mlops/fairness/report.py) | Exporte les rapports de fairness (CSV, PNG, xlsx) |
 | [`src/home_credit_mlops/reporting/excel.py`](../src/home_credit_mlops/reporting/excel.py) | Regroupe les artefacts en classeurs Excel |
 
 ### Tests
 
 Le dossier `tests/` couvre notamment les métriques métier, la recherche de seuil,
-les stratégies de sampling, les rapports, le workflow de benchmark et la réponse
-du modèle de serving.
+les stratégies de sampling, les rapports, le workflow de benchmark, la réponse
+du modèle de serving et les métriques de fairness.
 
 ```bash
 poetry run ruff check scripts src tests
 poetry run pytest -q
 ```
 
-## 15. Scénarios d'utilisation
+Ces deux commandes sont exécutées automatiquement en CI
+([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) sur chaque push
+et pull request vers `main`.
+
+## 16. Scénarios d'utilisation
 
 ### Modification de la préparation des données
 
@@ -763,7 +841,7 @@ Le recours à `--n-jobs 1` est recommandé pour les campagnes lourdes sous WSL.
 Les processus parallèles dupliquent les matrices transformées et les jeux
 sur-échantillonnés, ce qui peut saturer la mémoire malgré un nombre élevé de CPU.
 
-## 16. Trame de présentation du pipeline
+## 17. Trame de présentation du pipeline
 
 Une présentation synthétique peut suivre cette narration :
 
@@ -778,11 +856,12 @@ Une présentation synthétique peut suivre cette narration :
 > les paramètres, métriques, artefacts et versions, puis expose une réponse
 > contenant la probabilité de défaut, le seuil versionné et la décision de crédit.
 
-## 17. Points de vigilance
+## 18. Points de vigilance
 
 - Le rapport `FN/FP = 10` reste une hypothèse pédagogique à faire valider par le métier.
 - Le holdout doit rester absent de la sélection des modèles et des seuils.
 - Le sampling doit rester à l'intérieur de la validation croisée.
 - Les résultats supérieurs aux références Kaggle doivent déclencher un audit de fuite de données.
 - Le tracking local n'apporte ni haute disponibilité ni collaboration distante.
-- La surveillance de dérive, la CI/CD et le déploiement cloud constituent des prolongements possibles.
+- La surveillance de dérive et le déploiement cloud restent des prolongements possibles (CI/CD lint+tests déjà en place, voir section 15).
+- L'analyse de fairness (section 14) remonte des écarts significatifs par genre et par tranche d'âge sur le champion actuel, non encore traités (recalibration par groupe, revue des features corrélées à l'âge) : à considérer avant tout usage réel.
