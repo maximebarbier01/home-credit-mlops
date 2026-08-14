@@ -1,29 +1,29 @@
-"""Schemas Pydantic de l'API : modele de requete dynamique + reponse.
+"""Schemas Pydantic de l'API : modèle de requête dynamique + réponse.
 
-Le modele MLflow attend 548 colonnes deja calculees. Ecrire ces 548 champs
-a la main serait ingerable et impossible a maintenir en phase avec le
-modele reellement charge. Le modele de requete est donc construit
-dynamiquement au demarrage, a partir de la signature MLflow du modele
-charge (voir build_request_model). Le type et le caractere obligatoire de
+Le modèle MLflow attend 548 colonnes déjà calculées. Ecrire ces 548 champs
+à la main serait ingérable et impossible à maintenir en phase avec le
+modèle réellement chargé. Le modèle de requête est donc construit
+dynamiquement au démarrage, à partir de la signature MLflow du modèle
+chargé (voir build_request_model). Le type et le caractère obligatoire de
 CHACUN des 548 champs viennent directement de cette signature (Pydantic
 rejette donc deja tout champ requis manquant ou de mauvais type, sur les
-548 colonnes, pas seulement celles listees ci-dessous).
+548 colonnes, pas seulement celles listées ci-dessous).
 
 En plus de ca, deux niveaux de validation de bornes explicites :
 
-- `business_rule_validators` : les champs cites nommement par la consigne
+- `business_rule_validators` : les champs cités nommement par la consigne
   (age, revenu, montant du credit, taille du foyer) ;
-- `plausible_range_validators` : bornes connues et non ambigues d'apres le
-  dictionnaire de donnees Home Credit (flags binaires, scores EXT_SOURCE
+- `plausible_range_validators` : bornes connues et non ambigues d'après le
+  dictionnaire de données Home Credit (flags binaires, scores EXT_SOURCE
   dans [0, 1], heure de la demande 0-23, notes de region 1-3...).
 
 Volontairement absent : une validation de bornes sur les ~500 colonnes
 restantes (agregats bureau/previous/installments/credit_card - sommes,
-moyennes, ratios). Contrairement aux categories ci-dessus, elles n'ont pas
-de borne universelle non ambigue (une somme de credits ou un ratio de
-paiement n'a pas de maximum metier fixe), et une regle generique "tout
-numerique doit etre positif" serait fausse : DAYS_EMPLOYED, DAYS_BIRTH et
-les autres colonnes DAYS_* sont legitimement negatives dans ce dataset
+moyennes, ratios). Contrairement aux catégories ci-dessus, elles n'ont pas
+de borne universelle non ambigue (une somme de crédits ou un ratio de
+paiement n'a pas de maximum métier fixe), et une règle générique "tout
+numérique doit être positif" serait fausse : DAYS_EMPLOYED, DAYS_BIRTH et
+les autres colonnes DAYS_* sont légitimement négatives dans ce dataset
 (nombre de jours avant la demande).
 """
 
