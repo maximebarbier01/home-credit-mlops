@@ -4,13 +4,27 @@ Le modele MLflow attend 548 colonnes deja calculees. Ecrire ces 548 champs
 a la main serait ingerable et impossible a maintenir en phase avec le
 modele reellement charge. Le modele de requete est donc construit
 dynamiquement au demarrage, a partir de la signature MLflow du modele
-charge (voir build_request_model), avec des validateurs metier explicites
-uniquement sur les quelques champs pour lesquels la consigne demande des
-verifications de bornes (age, revenu, montant du credit, taille du foyer).
+charge (voir build_request_model). Le type et le caractere obligatoire de
+CHACUN des 548 champs viennent directement de cette signature (Pydantic
+rejette donc deja tout champ requis manquant ou de mauvais type, sur les
+548 colonnes, pas seulement celles listees ci-dessous).
 
-Volontairement absent : une regle generique "tout numerique doit etre
-positif" - des colonnes comme DAYS_EMPLOYED ou DAYS_BIRTH sont legitimement
-negatives dans ce dataset (nombre de jours avant la demande).
+En plus de ca, deux niveaux de validation de bornes explicites :
+
+- `business_rule_validators` : les champs cites nommement par la consigne
+  (age, revenu, montant du credit, taille du foyer) ;
+- `plausible_range_validators` : bornes connues et non ambigues d'apres le
+  dictionnaire de donnees Home Credit (flags binaires, scores EXT_SOURCE
+  dans [0, 1], heure de la demande 0-23, notes de region 1-3...).
+
+Volontairement absent : une validation de bornes sur les ~500 colonnes
+restantes (agregats bureau/previous/installments/credit_card - sommes,
+moyennes, ratios). Contrairement aux categories ci-dessus, elles n'ont pas
+de borne universelle non ambigue (une somme de credits ou un ratio de
+paiement n'a pas de maximum metier fixe), et une regle generique "tout
+numerique doit etre positif" serait fausse : DAYS_EMPLOYED, DAYS_BIRTH et
+les autres colonnes DAYS_* sont legitimement negatives dans ce dataset
+(nombre de jours avant la demande).
 """
 
 from __future__ import annotations
@@ -23,6 +37,37 @@ from mlflow.types import DataType
 from pydantic import BaseModel, create_model, field_validator
 
 REQUEST_MODEL_NAME = "CreditScoringRequest"
+
+# Flags binaires (0 ou 1) d'apres le dictionnaire de donnees Home Credit.
+# FLAG_OWN_CAR / FLAG_OWN_REALTY sont exclus : ce sont des chaines "Y"/"N",
+# pas des entiers, dans la signature du modele.
+BINARY_FLAG_COLUMNS = [
+    "FLAG_MOBIL",
+    "FLAG_EMP_PHONE",
+    "FLAG_WORK_PHONE",
+    "FLAG_CONT_MOBILE",
+    "FLAG_PHONE",
+    "FLAG_EMAIL",
+    *[f"FLAG_DOCUMENT_{i}" for i in range(2, 22)],
+    "REG_REGION_NOT_LIVE_REGION",
+    "REG_REGION_NOT_WORK_REGION",
+    "LIVE_REGION_NOT_WORK_REGION",
+    "REG_CITY_NOT_LIVE_CITY",
+    "REG_CITY_NOT_WORK_CITY",
+    "LIVE_CITY_NOT_WORK_CITY",
+    "DAYS_EMPLOYED_ANOM",
+]
+
+# Scores EXT_SOURCE (et leurs agregats mean/min/max, qui restent dans le
+# meme intervalle) : normalises entre 0 et 1 par construction.
+EXT_SOURCE_UNIT_INTERVAL_COLUMNS = [
+    "EXT_SOURCE_1",
+    "EXT_SOURCE_2",
+    "EXT_SOURCE_3",
+    "EXT_SOURCES_MEAN",
+    "EXT_SOURCES_MIN",
+    "EXT_SOURCES_MAX",
+]
 
 
 class PredictionResponse(BaseModel):
@@ -98,6 +143,79 @@ def business_rule_validators() -> list[tuple[str, str, Any]]:
             ),
         ),
     ]
+
+
+def plausible_range_validators() -> list[tuple[str, str, Any]]:
+    """Validateurs de bornes connues et non ambigues (dictionnaire de donnees).
+
+    Complementaire de business_rule_validators : ici, des categories entieres
+    de colonnes plutot que des champs isoles, generees programmatiquement
+    pour eviter de dupliquer un validateur quasi identique 33 fois.
+    """
+    validators: list[tuple[str, str, Any]] = []
+
+    for field_name in BINARY_FLAG_COLUMNS:
+        validators.append(
+            (
+                field_name,
+                f"validate_binary_{field_name.lower()}",
+                _bounded_validator(
+                    field_name,
+                    predicate=lambda v: v in (0, 1),
+                    message=f"{field_name} must be 0 or 1.",
+                ),
+            )
+        )
+
+    for field_name in EXT_SOURCE_UNIT_INTERVAL_COLUMNS:
+        validators.append(
+            (
+                field_name,
+                f"validate_unit_interval_{field_name.lower()}",
+                _bounded_validator(
+                    field_name,
+                    predicate=lambda v: 0.0 <= v <= 1.0,
+                    message=f"{field_name} must be between 0 and 1.",
+                ),
+            )
+        )
+
+    validators.append(
+        (
+            "EXT_SOURCES_NA_COUNT",
+            "validate_ext_sources_na_count",
+            _bounded_validator(
+                "EXT_SOURCES_NA_COUNT",
+                predicate=lambda v: 0 <= v <= 3,
+                message="EXT_SOURCES_NA_COUNT must be between 0 and 3.",
+            ),
+        )
+    )
+    validators.append(
+        (
+            "HOUR_APPR_PROCESS_START",
+            "validate_hour_appr_process_start",
+            _bounded_validator(
+                "HOUR_APPR_PROCESS_START",
+                predicate=lambda v: 0 <= v <= 23,
+                message="HOUR_APPR_PROCESS_START must be between 0 and 23.",
+            ),
+        )
+    )
+    for field_name in ("REGION_RATING_CLIENT", "REGION_RATING_CLIENT_W_CITY"):
+        validators.append(
+            (
+                field_name,
+                f"validate_{field_name.lower()}",
+                _bounded_validator(
+                    field_name,
+                    predicate=lambda v: 1 <= v <= 3,
+                    message=f"{field_name} must be between 1 and 3.",
+                ),
+            )
+        )
+
+    return validators
 
 
 def build_request_model(

@@ -781,13 +781,31 @@ Le modèle attend 548 features déjà calculées (mêmes colonnes que
 diverger silencieusement du modèle réellement chargé. `build_request_model`
 construit donc le modèle Pydantic de la requête **au démarrage**, à partir
 de la signature MLflow du modèle chargé (`mlflow.types.Schema` →
-`DataType.to_python()` pour le typage). Cinq champs reçoivent en plus une
-règle métier explicite (factory functions de validateurs, filtrées pour ne
-s'appliquer que si le champ existe réellement dans le schéma chargé) :
-`AGE_YEARS` (18-100), `AMT_INCOME_TOTAL` (> 0), `AMT_CREDIT` (> 0),
-`CNT_CHILDREN` et `CNT_FAM_MEMBERS` (≥ 0). Volontairement absente : une
-règle générique "tout numérique doit être positif" — `DAYS_EMPLOYED` et
-`DAYS_BIRTH` sont légitimement négatifs dans ce dataset.
+`DataType.to_python()` pour le typage). Le caractère requis/optionnel et le
+type de chacun des 548 champs viennent directement de cette signature —
+Pydantic rejette donc déjà tout champ requis manquant ou de type incorrect
+sur l'ensemble des 548 colonnes, pas seulement celles listées ci-dessous.
+
+Deux niveaux de validation de bornes explicites s'y ajoutent (factory
+functions de validateurs, filtrées pour ne s'appliquer que si le champ
+existe réellement dans le schéma chargé — voir `build_request_model`) :
+
+- `business_rule_validators` (5 champs cités nommément par la consigne) :
+  `AGE_YEARS` (18-100), `AMT_INCOME_TOTAL` (> 0), `AMT_CREDIT` (> 0),
+  `CNT_CHILDREN` et `CNT_FAM_MEMBERS` (≥ 0) ;
+- `plausible_range_validators` (~40 champs supplémentaires, générés
+  programmatiquement par catégorie plutôt qu'un par un) : les flags
+  binaires (`FLAG_MOBIL`, `FLAG_DOCUMENT_2` à `21`, `REG_*_NOT_*_REGION`/
+  `CITY`, `DAYS_EMPLOYED_ANOM` — 0 ou 1), les scores `EXT_SOURCE_1/2/3` et
+  leurs agrégats `MEAN`/`MIN`/`MAX` (entre 0 et 1), `HOUR_APPR_PROCESS_START`
+  (0-23), `REGION_RATING_CLIENT`/`REGION_RATING_CLIENT_W_CITY` (1-3).
+
+Volontairement absente : une validation de bornes sur les ~500 colonnes
+restantes (agrégats bureau/previous/installments/credit_card — sommes,
+moyennes, ratios) : elles n'ont pas de borne métier universelle non
+ambiguë, et une règle générique "tout numérique doit être positif" serait
+fausse — `DAYS_EMPLOYED` et `DAYS_BIRTH` sont légitimement négatifs dans ce
+dataset.
 
 Point technique non trivial : `main.py` utilise
 `from __future__ import annotations` (convention du projet), qui transforme
@@ -868,8 +886,17 @@ enchaînés (`needs:`), sur push/PR vers `main` :
 l'API sans charger le vrai modèle de 130 Mo. `test_api_predict_integration.py`
 va plus loin : il charge un **vrai** petit modèle MLflow (sauvegardé dans
 `tmp_path`), exerçant le vrai chemin de chargement et de schéma dynamique,
-sans réseau. `test_api_real_model_smoke.py` (optionnel, ignoré par défaut)
-teste le vrai modèle publié, hors du job CI standard.
+sans réseau. `test_api_schemas.py` couvre spécifiquement
+`plausible_range_validators` (flags binaires, scores EXT_SOURCE, heure de
+la demande, notes de région) sur des schémas MLflow réduits construits à la
+main. `test_api_real_model_smoke.py` (optionnel, ignoré par défaut) teste
+le vrai modèle publié, hors du job CI standard.
+
+L'ensemble des validateurs de bornes (`business_rule_validators` +
+`plausible_range_validators`) a aussi été vérifié directement contre le
+vrai modèle à 548 champs (hors suite pytest, contrôle ponctuel) : chaque
+règle rejette bien la valeur invalide correspondante, et un payload valide
+complet passe toujours de bout en bout.
 
 ## 16. Nomenclature fichier par fichier
 

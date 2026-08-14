@@ -398,16 +398,26 @@ Le modèle attend les mêmes 548 features déjà calculées que celles utilisée
 l'entraînement (mêmes colonnes que `train_features.parquet`). Le schéma
 Pydantic de la requête est construit **dynamiquement** au démarrage à partir
 de la signature MLflow du modèle réellement chargé — il n'est jamais écrit à
-la main, pour ne jamais diverger silencieusement du modèle servi. Cinq champs
-ont des règles métier explicites en plus de leur type :
+la main, pour ne jamais diverger silencieusement du modèle servi. Au-delà du
+type et du caractère obligatoire (vérifiés sur les 548 champs), une
+quarantaine de champs ont en plus une règle de borne explicite :
 
-| Champ | Règle |
+| Champs | Règle |
 |---|---|
 | `AGE_YEARS` | entre 18 et 100 |
 | `AMT_INCOME_TOTAL` | strictement positif |
 | `AMT_CREDIT` | strictement positif |
-| `CNT_CHILDREN` | positif ou nul |
-| `CNT_FAM_MEMBERS` | positif ou nul |
+| `CNT_CHILDREN`, `CNT_FAM_MEMBERS` | positif ou nul |
+| Flags binaires (`FLAG_MOBIL`, `FLAG_DOCUMENT_2`-`21`, `REG_*_NOT_*_REGION/CITY`, ~33 champs) | 0 ou 1 |
+| `EXT_SOURCE_1/2/3`, `EXT_SOURCES_MEAN/MIN/MAX` | entre 0 et 1 |
+| `HOUR_APPR_PROCESS_START` | entre 0 et 23 |
+| `REGION_RATING_CLIENT`, `REGION_RATING_CLIENT_W_CITY` | entre 1 et 3 |
+
+Les ~500 colonnes restantes (agrégats bureau/previous/installments/credit
+card) n'ont volontairement pas de borne : ce sont des sommes, moyennes et
+ratios sans maximum métier universel, et une règle générique "positif
+uniquement" serait fausse (`DAYS_EMPLOYED`, `DAYS_BIRTH`... sont
+légitimement négatifs dans ce dataset).
 
 ### Lancer l'API en local
 

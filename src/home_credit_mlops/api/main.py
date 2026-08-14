@@ -29,6 +29,7 @@ from home_credit_mlops.api.schemas import (
     build_request_model,
     business_rule_validators,
     coerce_frame_dtypes,
+    plausible_range_validators,
 )
 from home_credit_mlops.logging_utils import configure_logging
 from home_credit_mlops.settings import ServingConfig, load_settings
@@ -74,7 +75,10 @@ def create_app(
         local_dir = resolve_model(settings.serving)
         scoring_model = load_model(local_dir)
         input_schema = scoring_model.metadata.get_input_schema()
-        request_model = build_request_model(input_schema, business_rule_validators())
+        request_model = build_request_model(
+            input_schema,
+            business_rule_validators() + plausible_range_validators(),
+        )
 
         app.state.model = scoring_model
         app.state.request_model = request_model
