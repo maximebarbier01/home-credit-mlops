@@ -49,6 +49,7 @@ Le découpage suit un principe simple :
 
 ```text
 home-credit-mlops/
+|-- .github/workflows/               # Pipeline CI/CD (lint, tests, build, deploy)
 |-- configs/                         # Configuration TOML
 |-- data/
 |   |-- raw/                         # Données Kaggle non versionnées
@@ -57,14 +58,18 @@ home-credit-mlops/
 |-- docs/                            # Documentation détaillée
 |-- scripts/                         # Points d'entrée CLI
 |-- src/home_credit_mlops/
+|   |-- api/                         # API FastAPI (serving production)
 |   |-- data/                        # Construction du dataset
 |   |-- eda/                         # Diagnostics et visualisations
+|   |-- fairness/                    # Metriques et rapports de fairness
 |   |-- features/                    # Preprocessing sklearn
 |   |-- modeling/                    # Modèles, métriques, SHAP et serving
 |   `-- reporting/                   # Consolidation des rapports Excel
 |-- tests/                           # Tests automatisés
+|-- Dockerfile                       # Image de l'API de scoring
 |-- mlflow.db                        # Tracking et registry locaux, non versionnés
 |-- mlartifacts/                     # Artefacts MLflow locaux, non versionnés
+|-- artifacts/                       # Cache modele HF Hub local, non versionné
 `-- reports/                         # Livrables générés, non versionnés
 ```
 
@@ -76,7 +81,10 @@ Une nomenclature détaillée, fichier par fichier, est disponible dans
 - WSL 2 avec Ubuntu pour l'environnement de développement actuel ;
 - Python `>=3.11,<3.13` ;
 - Poetry ;
-- fichiers Home Credit placés dans `data/raw/`.
+- fichiers Home Credit placés dans `data/raw/` ;
+- Docker (pour construire/tester l'image de l'API) ;
+- un compte Hugging Face (pour publier/télécharger le modèle de l'API, voir
+  section "API de scoring").
 
 Installation des dépendances depuis WSL :
 
@@ -84,6 +92,11 @@ Installation des dépendances depuis WSL :
 cd /home/maxime/projects/home-credit-mlops
 poetry install
 ```
+
+`poetry install` installe tous les groupes de dépendances (entraînement,
+rapports/EDA, API, tests). Le build Docker de l'API n'installe que les
+groupes `main` et `api` (`poetry install --only main,api`), pour une image
+plus légère.
 
 Vérification de l'environnement :
 
@@ -111,6 +124,8 @@ Le fichier [`configs/default.toml`](configs/default.toml) centralise notamment :
 | `training` | `cv_folds` | `5` | Nombre de plis de validation croisée |
 | `training` | `n_jobs` | `1` | Nombre de processus parallèles |
 | `mlflow` | `experiment_name` | `home-credit-scoring` | Nom de l'expérience MLflow |
+| `serving` | `model_repo_id` | *(à définir)* | Dépôt Hugging Face Hub du modèle servi par l'API |
+| `serving` | `revision` | `main` | Révision du dépôt HF Hub à télécharger |
 
 ## Exécution du pipeline
 
@@ -357,6 +372,88 @@ Format de réponse :
 La valeur `predicted_default = 1` signifie que la probabilité estimée dépasse le
 seuil métier. La décision associée est alors `refused`. Une valeur `0` produit
 la décision `approved`.
+
+## API de scoring (FastAPI) et déploiement
+
+Le serving MLflow ci-dessus reste utile pour du débogage local rapide contre
+une version précise du registry. Pour un déploiement réel (le besoin exprimé
+par Chloé Dubois : "API fonctionnelle et déployable, Docker Ready"), le projet
+expose une API FastAPI dédiée dans
+[`src/home_credit_mlops/api/`](src/home_credit_mlops/api/), avec validation
+des entrées, documentation Swagger automatique et chargement du modèle une
+seule fois au démarrage (jamais par requête).
+
+### Pourquoi une API séparée plutôt que `mlflow models serve`
+
+- Contrôle fin des erreurs (422 structuré sur une entrée invalide, 500 générique
+  sans fuite d'informations internes sur une erreur inattendue) ;
+- validation métier explicite sur les champs sensibles (âge, revenu, montant
+  du crédit, taille du foyer) — pas seulement un contrôle de type ;
+- image Docker autonome et déployable sur Hugging Face Spaces, sans dépendre
+  de l'infrastructure MLflow locale (`mlflow.db`/`mlartifacts/`) au runtime.
+
+### Contrat d'entrée
+
+Le modèle attend les mêmes 548 features déjà calculées que celles utilisées à
+l'entraînement (mêmes colonnes que `train_features.parquet`). Le schéma
+Pydantic de la requête est construit **dynamiquement** au démarrage à partir
+de la signature MLflow du modèle réellement chargé — il n'est jamais écrit à
+la main, pour ne jamais diverger silencieusement du modèle servi. Cinq champs
+ont des règles métier explicites en plus de leur type :
+
+| Champ | Règle |
+|---|---|
+| `AGE_YEARS` | entre 18 et 100 |
+| `AMT_INCOME_TOTAL` | strictement positif |
+| `AMT_CREDIT` | strictement positif |
+| `CNT_CHILDREN` | positif ou nul |
+| `CNT_FAM_MEMBERS` | positif ou nul |
+
+### Lancer l'API en local
+
+```bash
+poetry run uvicorn home_credit_mlops.api.main:app --reload --port 8000
+```
+
+Documentation interactive (Swagger) : <http://127.0.0.1:8000/docs>.
+Vérification de santé : `curl http://127.0.0.1:8000/health`.
+
+Au premier démarrage, le modèle est téléchargé depuis un dépôt Hugging Face
+Hub (`[serving]` dans `configs/default.toml`) — publié au préalable via :
+
+```bash
+export HF_TOKEN=hf_...  # jamais commité
+poetry run python scripts/export_model_for_serving.py \
+  --model-uri models:/home-credit-scoring/3 \
+  --hf-repo-id <votre-compte-hf>/home-credit-scoring
+```
+
+### Construire et lancer l'image Docker
+
+```bash
+docker build -t home-credit-scoring-api .
+docker run -p 8000:7860 -e HF_TOKEN=hf_... home-credit-scoring-api
+```
+
+Un exemple de requête `curl` (payload construit depuis
+`serving_input_example.json`, voir section précédente pour le télécharger) :
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/predict \
+  -H "Content-Type: application/json" \
+  -d @payload.json | python -m json.tool
+```
+
+### CI/CD
+
+Le pipeline [`.github/workflows/ci.yml`](.github/workflows/ci.yml) enchaîne
+trois jobs sur chaque push/PR vers `main` :
+
+1. `lint-and-test` — `ruff check` puis `pytest` (couvre aussi l'API) ;
+2. `build-image` — construit l'image Docker (garde-fou avant déploiement) ;
+3. `deploy-to-hf-space` — uniquement sur push vers `main`, publie le code sur
+   un Hugging Face Space (SDK Docker) via les secrets `HF_TOKEN` et
+   `HF_SPACE_REPO_ID` du dépôt GitHub.
 
 ## Qualité et limites
 

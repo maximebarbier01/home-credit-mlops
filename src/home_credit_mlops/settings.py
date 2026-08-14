@@ -67,6 +67,15 @@ class MlflowConfig:
 
 
 @dataclass(frozen=True)
+class ServingConfig:
+    """Configuration du chargement du modele par l'API de scoring."""
+
+    model_repo_id: str
+    revision: str
+    local_cache_dir: Path
+
+
+@dataclass(frozen=True)
 class Settings:
     """Regroupe l'ensemble des configurations du projet."""
 
@@ -75,6 +84,7 @@ class Settings:
     business: BusinessConfig
     training: TrainingConfig
     mlflow: MlflowConfig
+    serving: ServingConfig
 
 
 def _resolve_path(value: str) -> Path:
@@ -108,6 +118,7 @@ def load_settings(
     business = data["business"]
     training = data["training"]
     mlflow = data["mlflow"]
+    serving = data["serving"]
 
     # Construction de la configuration typée
     return Settings(
@@ -138,5 +149,10 @@ def load_settings(
             experiment_name=mlflow["experiment_name"],
             backend_store_path=_resolve_path(mlflow["backend_store_path"]),
             artifact_root=_resolve_path(mlflow["artifact_root"]),
+        ),
+        serving=ServingConfig(
+            model_repo_id=serving["model_repo_id"],
+            revision=serving["revision"],
+            local_cache_dir=_resolve_path(serving["local_cache_dir"]),
         ),
     )

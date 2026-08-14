@@ -18,6 +18,7 @@ from home_credit_mlops.settings import (
     DatasetConfig,
     MlflowConfig,
     PathsConfig,
+    ServingConfig,
     Settings,
     TrainingConfig,
 )
@@ -52,6 +53,11 @@ def _build_test_settings(tmp_path: Path) -> Settings:
             experiment_name='test-experiment',
             backend_store_path=tmp_path / 'mlflow.db',
             artifact_root=tmp_path / 'mlartifacts',
+        ),
+        serving=ServingConfig(
+            model_repo_id='test-account/home-credit-scoring',
+            revision='main',
+            local_cache_dir=tmp_path / 'hf_model_cache',
         ),
     )
 

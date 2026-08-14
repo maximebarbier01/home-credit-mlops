@@ -120,6 +120,15 @@ poetry run python --version
 L'exécution doit avoir lieu dans WSL, car l'installation Poetry actuelle se
 trouve dans Ubuntu et non dans PowerShell Windows.
 
+Les dépendances sont réparties en groupes Poetry : `main` (calcul/inférence
+toujours nécessaire — pandas, scikit-learn, mlflow, lightgbm, xgboost,
+imbalanced-learn), `reporting` (matplotlib, seaborn, shap, missingno,
+openpyxl — EDA et rapports, pas nécessaire à l'API), `api` (fastapi,
+huggingface_hub, pydantic) et `dev` (pytest, ruff, httpx2). `poetry install`
+sans option installe tous les groupes ; l'image Docker de l'API n'installe
+que `main` et `api` (`poetry install --only main,api`) pour rester légère
+(voir section 15.5).
+
 ### 4.2 Configuration TOML
 
 Le fichier [`configs/default.toml`](../configs/default.toml) constitue la source
@@ -138,6 +147,11 @@ threshold_grid_size = 401
 [training]
 cv_folds = 5
 n_jobs = 1
+
+[serving]
+model_repo_id = "<compte-hf>/home-credit-scoring"
+revision = "main"
+local_cache_dir = "artifacts/hf_model_cache"
 ```
 
 Le coût élevé du faux négatif traduit le risque d'accorder un crédit à un client
@@ -668,6 +682,10 @@ Le tableau `predictions` contient une réponse par ligne d'entrée. Les champs
 `refused` et `approved` fournissent une représentation directement exploitable
 par une future API métier.
 
+Ce serving MLflow reste utile pour du débogage local rapide contre une
+version précise du registry. Le chemin de production est l'API FastAPI
+décrite en section 15.
+
 ## 14. Phase 9bis : analyse de fairness (biais)
 
 Module :
@@ -738,7 +756,122 @@ recalibration du seuil par groupe, revue des features corrélées à l'âge) —
 à documenter comme limite connue du champion actuel plutôt que comme un
 problème résolu.
 
-## 15. Nomenclature fichier par fichier
+## 15. Phase 10 : API de scoring et déploiement
+
+Module :
+[`src/home_credit_mlops/api/`](../src/home_credit_mlops/api/) —
+`model_loader.py` (téléchargement Hugging Face Hub + chargement MLflow),
+`schemas.py` (schéma Pydantic dynamique, validateurs métier, coercition de
+types), `main.py` (application FastAPI).
+
+### 15.1 Pourquoi une API dédiée
+
+`mlflow models serve` (section 13) sert bien pour du débogage local, mais
+pour un déploiement conteneurisé et documenté (besoin explicite de l'étape 2
+de la mission : "API fonctionnelle et déployable, Docker Ready"), une API
+FastAPI dédiée apporte : validation d'entrée avec règles métier, gestion
+d'erreurs propre (422 structuré / 500 générique sans fuite d'informations),
+documentation Swagger automatique, et une image Docker autonome ne
+dépendant pas de l'infrastructure MLflow locale au runtime.
+
+### 15.2 Schéma de requête dynamique
+
+Le modèle attend 548 features déjà calculées (mêmes colonnes que
+`train_features.parquet`). Écrire ce schéma à la main serait ingérable et
+diverger silencieusement du modèle réellement chargé. `build_request_model`
+construit donc le modèle Pydantic de la requête **au démarrage**, à partir
+de la signature MLflow du modèle chargé (`mlflow.types.Schema` →
+`DataType.to_python()` pour le typage). Cinq champs reçoivent en plus une
+règle métier explicite (factory functions de validateurs, filtrées pour ne
+s'appliquer que si le champ existe réellement dans le schéma chargé) :
+`AGE_YEARS` (18-100), `AMT_INCOME_TOTAL` (> 0), `AMT_CREDIT` (> 0),
+`CNT_CHILDREN` et `CNT_FAM_MEMBERS` (≥ 0). Volontairement absente : une
+règle générique "tout numérique doit être positif" — `DAYS_EMPLOYED` et
+`DAYS_BIRTH` sont légitimement négatifs dans ce dataset.
+
+Point technique non trivial : `main.py` utilise
+`from __future__ import annotations` (convention du projet), qui transforme
+les annotations de fonction en chaînes de caractères à la définition. Pour
+la route `/predict`, dont le type du payload n'existe qu'à l'exécution
+(schéma dynamique), l'annotation est donc fixée explicitement via
+`handler.__annotations__` après la définition de la fonction plutôt que par
+une annotation classique — sans ça, FastAPI ne route pas correctement la
+requête vers le corps HTTP (bug rencontré et corrigé pendant le
+développement).
+
+Autre point technique : `mlflow.pyfunc.PyFuncModel.predict()` applique une
+vérification stricte des dtypes (ex. refuse un `int64` là où un `int32` est
+attendu, ou un `object` contenant `None` là où un `float32` est attendu).
+`coerce_frame_dtypes` recale donc chaque colonne numérique sur le dtype
+numpy exact de la signature juste avant l'appel au modèle.
+
+### 15.3 Chargement du modèle : une seule fois, au démarrage
+
+Exigence explicite de la consigne. Le modèle (~130 Mo) est téléchargé
+depuis un dépôt Hugging Face Hub via `huggingface_hub.snapshot_download`
+dans le `lifespan` FastAPI (`@asynccontextmanager`, pas le
+`@app.on_event("startup")` déprécié), stocké sur `app.state`, jamais
+rechargé par requête. La route `/predict` est enregistrée dynamiquement
+(`app.add_api_route`) après ce chargement, puisque son schéma en dépend.
+
+`create_app()` est une factory plutôt qu'une instance unique au niveau
+module : cela permet aux tests de construire une application isolée avec un
+modèle factice injecté (`resolve_model`/`load_model` paramétrables), sans
+faire fuiter des routes enregistrées dynamiquement d'un test à l'autre.
+`app = create_app()` reste disponible au niveau module pour la convention
+uvicorn (`module:app`).
+
+### 15.4 Publication du modèle sur Hugging Face Hub
+
+```bash
+export HF_TOKEN=hf_...
+poetry run python scripts/export_model_for_serving.py \
+  --model-uri models:/home-credit-scoring/3 \
+  --hf-repo-id <compte-hf>/home-credit-scoring
+```
+
+Étape manuelle et délibérée, séparée de `register_champion_model.py` :
+promouvoir un champion dans le registry local et le publier publiquement
+sont deux décisions distinctes.
+
+### 15.5 Docker
+
+`Dockerfile` (racine du projet) : build multi-stage, `python:3.12-slim`
+(aligné sur la version Python qui a servi à sérialiser le modèle
+enregistré), n'installe que les groupes Poetry `main` et `api`
+(`poetry install --only main,api`), utilisateur non-root, port `7860`
+(convention Hugging Face Spaces SDK Docker). Le modèle n'est **pas**
+embarqué dans l'image — il est téléchargé au démarrage du conteneur, ce qui
+permet de promouvoir un nouveau champion sans reconstruire l'image.
+
+```bash
+docker build -t home-credit-scoring-api .
+docker run -p 8000:7860 -e HF_TOKEN=hf_... home-credit-scoring-api
+```
+
+### 15.6 CI/CD
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) : trois jobs
+enchaînés (`needs:`), sur push/PR vers `main` :
+
+1. `lint-and-test` — `ruff check` + `pytest`, couvre aussi l'API ;
+2. `build-image` — construit l'image Docker (garde-fou avant Hugging Face
+   Spaces, qui construit lui-même l'image à partir du code poussé) ;
+3. `deploy-to-hf-space` — uniquement sur push vers `main`, publie le dépôt
+   sur un Hugging Face Space (SDK Docker) via `huggingface_hub`, secrets
+   `HF_TOKEN` et `HF_SPACE_REPO_ID`.
+
+### 15.7 Tests
+
+`tests/conftest.py` fournit un `StubScoringModel` (imite l'interface
+`PyFuncModel.predict`/`.metadata`) et un schéma MLflow réduit, pour tester
+l'API sans charger le vrai modèle de 130 Mo. `test_api_predict_integration.py`
+va plus loin : il charge un **vrai** petit modèle MLflow (sauvegardé dans
+`tmp_path`), exerçant le vrai chemin de chargement et de schéma dynamique,
+sans réseau. `test_api_real_model_smoke.py` (optionnel, ignoré par défaut)
+teste le vrai modèle publié, hors du job CI standard.
+
+## 16. Nomenclature fichier par fichier
 
 ### Points d'entrée
 
@@ -748,6 +881,7 @@ problème résolu.
 | [`scripts/run_home_credit_experiment.py`](../scripts/run_home_credit_experiment.py) | Lance une campagne de benchmark |
 | [`scripts/register_champion_model.py`](../scripts/register_champion_model.py) | Réentraîne et enregistre rapidement le champion MLflow |
 | [`scripts/analyze_fairness.py`](../scripts/analyze_fairness.py) | Analyse la fairness (genre, tranche d'âge) du champion d'une campagne |
+| [`scripts/export_model_for_serving.py`](../scripts/export_model_for_serving.py) | Publie un modèle enregistré vers un dépôt Hugging Face Hub |
 | [`scripts/mlflow_ui.py`](../scripts/mlflow_ui.py) | Lance l'interface MLflow locale |
 
 ### Socle applicatif
@@ -782,11 +916,21 @@ problème résolu.
 | [`src/home_credit_mlops/fairness/report.py`](../src/home_credit_mlops/fairness/report.py) | Exporte les rapports de fairness (CSV, PNG, xlsx) |
 | [`src/home_credit_mlops/reporting/excel.py`](../src/home_credit_mlops/reporting/excel.py) | Regroupe les artefacts en classeurs Excel |
 
+### API de scoring
+
+| Fichier | Rôle |
+|---|---|
+| [`src/home_credit_mlops/api/model_loader.py`](../src/home_credit_mlops/api/model_loader.py) | Télécharge (Hugging Face Hub) et charge le modèle, une seule fois au démarrage |
+| [`src/home_credit_mlops/api/schemas.py`](../src/home_credit_mlops/api/schemas.py) | Schéma Pydantic dynamique, validateurs métier, coercition de dtypes |
+| [`src/home_credit_mlops/api/main.py`](../src/home_credit_mlops/api/main.py) | Application FastAPI : `/health`, `/predict`, gestion d'erreurs |
+| [`Dockerfile`](../Dockerfile) | Image Docker de l'API (multi-stage, `python:3.12-slim`) |
+
 ### Tests
 
 Le dossier `tests/` couvre notamment les métriques métier, la recherche de seuil,
 les stratégies de sampling, les rapports, le workflow de benchmark, la réponse
-du modèle de serving et les métriques de fairness.
+du modèle de serving, les métriques de fairness et l'API FastAPI (validation,
+prédiction, intégration MLflow).
 
 ```bash
 poetry run ruff check scripts src tests
@@ -797,7 +941,7 @@ Ces deux commandes sont exécutées automatiquement en CI
 ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) sur chaque push
 et pull request vers `main`.
 
-## 16. Scénarios d'utilisation
+## 17. Scénarios d'utilisation
 
 ### Modification de la préparation des données
 
@@ -841,7 +985,7 @@ Le recours à `--n-jobs 1` est recommandé pour les campagnes lourdes sous WSL.
 Les processus parallèles dupliquent les matrices transformées et les jeux
 sur-échantillonnés, ce qui peut saturer la mémoire malgré un nombre élevé de CPU.
 
-## 17. Trame de présentation du pipeline
+## 18. Trame de présentation du pipeline
 
 Une présentation synthétique peut suivre cette narration :
 
@@ -856,12 +1000,13 @@ Une présentation synthétique peut suivre cette narration :
 > les paramètres, métriques, artefacts et versions, puis expose une réponse
 > contenant la probabilité de défaut, le seuil versionné et la décision de crédit.
 
-## 18. Points de vigilance
+## 19. Points de vigilance
 
 - Le rapport `FN/FP = 10` reste une hypothèse pédagogique à faire valider par le métier.
 - Le holdout doit rester absent de la sélection des modèles et des seuils.
 - Le sampling doit rester à l'intérieur de la validation croisée.
 - Les résultats supérieurs aux références Kaggle doivent déclencher un audit de fuite de données.
 - Le tracking local n'apporte ni haute disponibilité ni collaboration distante.
-- La surveillance de dérive et le déploiement cloud restent des prolongements possibles (CI/CD lint+tests déjà en place, voir section 15).
+- La surveillance de dérive (data drift) en production reste un prolongement possible, non implémenté.
+- Le déploiement cloud (API FastAPI + Docker + CI/CD vers Hugging Face Spaces, section 15) est implémenté côté code, mais nécessite que l'utilisateur crée un compte Hugging Face, publie le modèle (`scripts/export_model_for_serving.py`) et configure les secrets `HF_TOKEN`/`HF_SPACE_REPO_ID` avant d'être réellement actif.
 - L'analyse de fairness (section 14) remonte des écarts significatifs par genre et par tranche d'âge sur le champion actuel, non encore traités (recalibration par groupe, revue des features corrélées à l'âge) : à considérer avant tout usage réel.

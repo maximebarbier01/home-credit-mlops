@@ -13,12 +13,7 @@ dependencies = [
     "pyarrow>=16,<21",
     "scikit-learn>=1.5,<2.0",
     "mlflow>=2.14,<4.0",
-    "matplotlib>=3.9,<4.0",
-    "seaborn>=0.13,<1.0",
-    "shap==0.51.0",
-    "missingno (>=0.5.2,<0.6.0)",
     "lightgbm (>=4.6.0,<5.0.0)",
-    "openpyxl (>=3.1.5,<4.0.0)",
     "uvicorn (>=0.49.0,<0.50.0)",
     "imbalanced-learn (>=0.14.2,<0.15.0)",
     "xgboost (>=3.1,<4.0)",
@@ -35,6 +30,19 @@ packages = [{ include = "home_credit_mlops", from = "src" }]
 pytest = "^8.4.0"
 ruff = "^0.12.0"
 ipykernel = "^7.3.0"
+httpx2 = "^2.10.0"
+
+[tool.poetry.group.reporting.dependencies]
+matplotlib = ">=3.9,<4.0"
+seaborn = ">=0.13,<1.0"
+shap = "0.51.0"
+missingno = ">=0.5.2,<0.6.0"
+openpyxl = ">=3.1.5,<4.0.0"
+
+[tool.poetry.group.api.dependencies]
+fastapi = ">=0.138,<1.0"
+huggingface-hub = ">=1.20,<2.0"
+pydantic = ">=2.13,<3.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
