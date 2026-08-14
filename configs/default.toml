@@ -27,8 +27,6 @@ backend_store_path = "mlflow.db"
 artifact_root = "mlartifacts"
 
 [serving]
-# A remplacer par le depot Hugging Face Hub reel une fois cree
-# (voir scripts/export_model_for_serving.py).
-model_repo_id = "REPLACE_WITH_YOUR_HF_USERNAME/home-credit-scoring"
+model_repo_id = "mxmbrbr/home-credit-mlops"
 revision = "main"
 local_cache_dir = "artifacts/hf_model_cache"
