@@ -858,26 +858,69 @@ sont deux décisions distinctes.
 (aligné sur la version Python qui a servi à sérialiser le modèle
 enregistré), n'installe que les groupes Poetry `main` et `api`
 (`poetry install --only main,api`), utilisateur non-root, port `7860`
-(convention Hugging Face Spaces SDK Docker). Le modèle n'est **pas**
-embarqué dans l'image — il est téléchargé au démarrage du conteneur, ce qui
-permet de promouvoir un nouveau champion sans reconstruire l'image.
+(convention Hugging Face Spaces SDK Docker, conservée même si le
+déploiement effectif ne cible plus Spaces — voir 15.6). Le modèle n'est
+**pas** embarqué dans l'image — il est téléchargé au démarrage du
+conteneur, ce qui permet de promouvoir un nouveau champion sans
+reconstruire l'image.
 
 ```bash
 docker build -t home-credit-scoring-api .
 docker run -p 8000:7860 -e HF_TOKEN=hf_... home-credit-scoring-api
 ```
 
+**Trois bugs réels trouvés en testant le conteneur réellement construit et
+lancé** (pas seulement écrit — voir 15.7) :
+
+- **Permissions** : le cache HF (`artifacts/hf_model_cache`) et le
+  répertoire courant (`/app`) doivent être inscriptibles par l'utilisateur
+  non-root — `chown` explicite sur `artifacts/` dans le Dockerfile.
+- **Tracking MLflow non désiré** : même pour un chargement purement local,
+  `mlflow.pyfunc.load_model()` tente par défaut de se connecter à
+  `sqlite:///<cwd>/mlflow.db` (comportement par défaut de MLflow 3.x en
+  l'absence de configuration explicite) — ce qui échoue si `/app` n'est
+  pas inscriptible, et toucherait sinon le vrai `mlflow.db` du projet en
+  dev local. `model_loader.load_scoring_model` fixe désormais
+  explicitement `mlflow.set_tracking_uri` vers un répertoire temporaire
+  jetable avant de charger le modèle.
+- **Imports "eager" dans les `__init__.py` de packages** : dépickler
+  `CreditScoringModel` importe `home_credit_mlops.modeling`, dont
+  `__init__.py` réexportait `run_benchmark_experiment` — entraînant en
+  cascade l'import de `data/home_credit.py` et donc de `missingno`,
+  délibérément exclu de l'image (groupe `reporting`). Ces réexports
+  n'étaient utilisés nulle part dans le code (vérifié) ; supprimés dans
+  `modeling/`, `data/`, `eda/` et `features/` — `__init__.py` minimal,
+  comme c'était déjà le cas pour `api/`, `reporting/` et `fairness/`.
+- **Bibliothèque système manquante** : `lightgbm` charge une bibliothèque
+  native compilée dépendant de `libgomp1` (runtime OpenMP), absente de
+  `python:3.12-slim`. Installée explicitement via `apt-get` dans le stage
+  runtime.
+
 ### 15.6 CI/CD
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) : trois jobs
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) : deux jobs
 enchaînés (`needs:`), sur push/PR vers `main` :
 
 1. `lint-and-test` — `ruff check` + `pytest`, couvre aussi l'API ;
-2. `build-image` — construit l'image Docker (garde-fou avant Hugging Face
-   Spaces, qui construit lui-même l'image à partir du code poussé) ;
-3. `deploy-to-hf-space` — uniquement sur push vers `main`, publie le dépôt
-   sur un Hugging Face Space (SDK Docker) via `huggingface_hub`, secrets
-   `HF_TOKEN` et `HF_SPACE_REPO_ID`.
+2. `build-and-deploy` — construit l'image Docker puis la **déploie
+   réellement dans le runner GitHub Actions** (environnement cible
+   "simulé", au sens de la consigne) : conteneur lancé, `/health` interrogé
+   jusqu'à ce que le modèle soit chargé, puis `/predict` testé avec
+   [`tests/fixtures/sample_predict_payload.json`](../tests/fixtures/sample_predict_payload.json).
+
+**Pourquoi pas un déploiement réel sur Hugging Face Spaces ?** C'était le
+plan initial (job `deploy-to-hf-space`), testé en conditions réelles : la
+création du Space échoue avec une erreur `402 Payment Required` —
+l'hébergement Docker/Gradio sur le tier gratuit "cpu-basic" de Hugging Face
+nécessite désormais un abonnement PRO. Plutôt que de bloquer sur une
+dépendance payante hors périmètre pédagogique, le déploiement a été
+remplacé par un déploiement simulé dans le runner CI, qui reste une
+vérification bout-en-bout complète (build réel, démarrage réel du
+conteneur, téléchargement réel du modèle depuis Hugging Face Hub, vraie
+requête HTTP) sans nécessiter de compte payant. `scripts/export_model_for_serving.py`
+et la publication sur Hugging Face Hub (15.4) restent inchangés : c'est
+uniquement l'hébergement de l'API elle-même qui n'est plus déployé sur une
+plateforme externe.
 
 ### 15.7 Tests
 
@@ -1035,5 +1078,5 @@ Une présentation synthétique peut suivre cette narration :
 - Les résultats supérieurs aux références Kaggle doivent déclencher un audit de fuite de données.
 - Le tracking local n'apporte ni haute disponibilité ni collaboration distante.
 - La surveillance de dérive (data drift) en production reste un prolongement possible, non implémenté.
-- Le déploiement cloud (API FastAPI + Docker + CI/CD vers Hugging Face Spaces, section 15) est implémenté côté code, mais nécessite que l'utilisateur crée un compte Hugging Face, publie le modèle (`scripts/export_model_for_serving.py`) et configure les secrets `HF_TOKEN`/`HF_SPACE_REPO_ID` avant d'être réellement actif.
+- L'API FastAPI + Docker (section 15) est vérifiée bout-en-bout (build, démarrage réel du conteneur, chargement du vrai modèle, requête HTTP), y compris dans le pipeline CI/CD via un déploiement simulé dans le runner GitHub Actions. Le déploiement réel sur une plateforme externe (Hugging Face Spaces envisagé initialement) nécessite un abonnement PRO (tier gratuit "cpu-basic" non éligible au SDK Docker) — hors périmètre de ce projet pédagogique. Le modèle reste publié publiquement sur Hugging Face Hub (`scripts/export_model_for_serving.py`), seule l'hébergement de l'API n'est pas déployé en externe.
 - L'analyse de fairness (section 14) remonte des écarts significatifs par genre et par tranche d'âge sur le champion actuel, non encore traités (recalibration par groupe, revue des features corrélées à l'âge) : à considérer avant tout usage réel.

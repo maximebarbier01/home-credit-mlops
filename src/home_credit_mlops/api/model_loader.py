@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from pathlib import Path
 
+import mlflow
 import mlflow.pyfunc
 from huggingface_hub import snapshot_download
 
@@ -44,6 +46,16 @@ def resolve_model_source(serving: ServingConfig) -> Path:
 
 
 def load_scoring_model(local_dir: Path) -> mlflow.pyfunc.PyFuncModel:
-    """Charge le modele MLflow (wrapper CreditScoringModel) depuis un dossier local."""
+    """Charge le modele MLflow (wrapper CreditScoringModel) depuis un dossier local.
+
+    Meme pour un chargement purement local, MLflow tente par defaut de se
+    connecter a une base de tracking (sqlite:///<cwd>/mlflow.db si aucune
+    URI n'est configuree). En conteneur, le repertoire courant n'est pas
+    forcement inscriptible ; en local, ce serait le vrai mlflow.db du
+    projet, sans aucune raison d'etre touche pour du simple serving. On
+    pointe donc explicitement vers un repertoire temporaire jetable, cree a
+    chaque demarrage (le modele n'est charge qu'une seule fois).
+    """
     LOGGER.info("Loading scoring model from %s", local_dir)
+    mlflow.set_tracking_uri(f"sqlite:///{tempfile.mkdtemp()}/mlflow.db")
     return mlflow.pyfunc.load_model(local_dir.as_posix())

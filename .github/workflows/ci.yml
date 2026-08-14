@@ -38,7 +38,15 @@ jobs:
       - name: Tests (pytest)
         run: poetry run pytest -q
 
-  build-image:
+  build-and-deploy:
+    # Environnement cible "simule" (au sens de la consigne) : le conteneur
+    # est construit puis reellement lance et interroge dans le runner
+    # GitHub Actions, y compris un vrai telechargement du modele depuis
+    # Hugging Face Hub (depot public, aucun secret requis). Le deploiement
+    # sur une plateforme externe (Hugging Face Spaces) n'est pas fait ici :
+    # l'hebergement Docker/Gradio y necessite un abonnement PRO sur le tier
+    # gratuit "cpu-basic" (erreur 402 constatee), ce qui sort du perimetre
+    # de ce projet pedagogique.
     needs: lint-and-test
     runs-on: ubuntu-latest
     steps:
@@ -51,49 +59,45 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: home-credit-scoring-api:${{ github.sha }}
 
-  deploy-to-hf-space:
-    needs: build-image
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install huggingface_hub
-        run: pip install --no-cache-dir "huggingface_hub>=1.20,<2.0"
-
-      - name: Push to Hugging Face Space
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_SPACE_REPO_ID: ${{ secrets.HF_SPACE_REPO_ID }}
+      - name: Run container (target environment)
         run: |
-          python - <<'PY'
-          import os
-          from huggingface_hub import HfApi
+          docker run -d --name credit-api -p 8000:7860 \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+            home-credit-scoring-api:${{ github.sha }}
 
-          token = os.environ["HF_TOKEN"]
-          repo_id = os.environ["HF_SPACE_REPO_ID"]
+      - name: Wait for the API to become healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health | grep -q '"model_loaded":true'; then
+              echo "API healthy"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "API did not become healthy in time"
+          exit 1
 
-          api = HfApi(token=token)
-          api.create_repo(
-              repo_id=repo_id,
-              repo_type="space",
-              space_sdk="docker",
-              exist_ok=True,
-          )
-          api.upload_folder(
-              repo_id=repo_id,
-              folder_path=".",
-              repo_type="space",
-              ignore_patterns=[
-                  "mlruns/*", "mlartifacts/*", "mlflow.db*",
-                  "data/*", "reports/*", "artifacts/*", ".git/*",
-              ],
-              commit_message=f"Deploy {os.environ.get('GITHUB_SHA', 'unknown')}",
-          )
-          PY
+      - name: Smoke test /predict against the real published model
+        run: |
+          curl -sf -X POST http://localhost:8000/predict \
+            -H "Content-Type: application/json" \
+            -d @tests/fixtures/sample_predict_payload.json \
+            | tee /tmp/predict_response.json
+          python3 -c "
+          import json
+          body = json.load(open('/tmp/predict_response.json'))
+          assert 'credit_decision' in body, body
+          assert 'default_probability' in body, body
+          print('Smoke test OK:', body)
+          "
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs credit-api
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f credit-api || true

@@ -24,11 +24,23 @@ RUN poetry install --only main,api --no-interaction
 FROM python:3.12-slim AS runtime
 WORKDIR /app
 
+# lightgbm (et potentiellement xgboost) chargent une bibliotheque native
+# compilee qui depend de libgomp (runtime OpenMP), absente de l'image slim
+# par defaut.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --uid 1000 appuser
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/configs ./configs
+
+# Le modele est telecharge dans artifacts/hf_model_cache (chemin relatif a
+# la racine du projet, /app ici) au demarrage du conteneur : ce dossier
+# doit etre inscriptible par l'utilisateur non-root.
+RUN mkdir -p /app/artifacts && chown -R appuser:appuser /app/artifacts
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1

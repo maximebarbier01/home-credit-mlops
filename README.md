@@ -389,8 +389,8 @@ seule fois au démarrage (jamais par requête).
   sans fuite d'informations internes sur une erreur inattendue) ;
 - validation métier explicite sur les champs sensibles (âge, revenu, montant
   du crédit, taille du foyer) — pas seulement un contrôle de type ;
-- image Docker autonome et déployable sur Hugging Face Spaces, sans dépendre
-  de l'infrastructure MLflow locale (`mlflow.db`/`mlartifacts/`) au runtime.
+- image Docker autonome et déployable, sans dépendre de l'infrastructure
+  MLflow locale (`mlflow.db`/`mlartifacts/`) au runtime.
 
 ### Contrat d'entrée
 
@@ -445,25 +445,34 @@ docker build -t home-credit-scoring-api .
 docker run -p 8000:7860 -e HF_TOKEN=hf_... home-credit-scoring-api
 ```
 
-Un exemple de requête `curl` (payload construit depuis
-`serving_input_example.json`, voir section précédente pour le télécharger) :
+Un exemple de requête `curl`, avec un payload réel déjà prêt dans le dépôt
+(548 champs, [`tests/fixtures/sample_predict_payload.json`](tests/fixtures/sample_predict_payload.json)) :
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/predict \
   -H "Content-Type: application/json" \
-  -d @payload.json | python -m json.tool
+  -d @tests/fixtures/sample_predict_payload.json | python -m json.tool
 ```
 
 ### CI/CD
 
 Le pipeline [`.github/workflows/ci.yml`](.github/workflows/ci.yml) enchaîne
-trois jobs sur chaque push/PR vers `main` :
+deux jobs sur chaque push/PR vers `main` :
 
 1. `lint-and-test` — `ruff check` puis `pytest` (couvre aussi l'API) ;
-2. `build-image` — construit l'image Docker (garde-fou avant déploiement) ;
-3. `deploy-to-hf-space` — uniquement sur push vers `main`, publie le code sur
-   un Hugging Face Space (SDK Docker) via les secrets `HF_TOKEN` et
-   `HF_SPACE_REPO_ID` du dépôt GitHub.
+2. `build-and-deploy` — construit l'image Docker, puis la **déploie
+   réellement dans le runner GitHub Actions** (environnement cible
+   "simulé") : conteneur lancé, `/health` interrogé jusqu'à ce que le vrai
+   modèle (public sur Hugging Face Hub) soit chargé, puis `/predict` testé
+   avec le payload d'exemple ci-dessus.
+
+**Pourquoi pas un déploiement réel sur Hugging Face Spaces ?** Testé, mais
+l'hébergement Docker sur le tier gratuit "cpu-basic" de Hugging Face
+nécessite désormais un abonnement PRO (erreur 402 constatée en pratique) —
+hors périmètre de ce projet pédagogique. Le déploiement simulé dans le
+runner CI reste une vérification bout-en-bout complète (build, démarrage
+réel du conteneur, téléchargement réel du modèle, vraie requête HTTP), sans
+dépendance à un compte payant.
 
 ## Qualité et limites
 
