@@ -460,19 +460,27 @@ Le pipeline [`.github/workflows/ci.yml`](.github/workflows/ci.yml) enchaîne
 deux jobs sur chaque push/PR vers `main` :
 
 1. `lint-and-test` — `ruff check` puis `pytest` (couvre aussi l'API) ;
-2. `build-and-deploy` — construit l'image Docker, puis la **déploie
-   réellement dans le runner GitHub Actions** (environnement cible
-   "simulé") : conteneur lancé, `/health` interrogé jusqu'à ce que le vrai
-   modèle (public sur Hugging Face Hub) soit chargé, puis `/predict` testé
-   avec le payload d'exemple ci-dessus.
+2. `build-and-deploy` — construit l'image Docker, la teste **réellement**
+   dans le runner GitHub Actions (conteneur lancé, `/health` interrogé
+   jusqu'à ce que le vrai modèle — public sur Hugging Face Hub — soit
+   chargé, puis `/predict` testé avec le payload d'exemple ci-dessus), puis,
+   **uniquement sur push vers `main`**, pousse l'image validée vers le
+   **GitHub Container Registry** (`ghcr.io/<owner>/<repo>:latest`), le
+   volet "déploiement" du pipeline.
 
 **Pourquoi pas un déploiement réel sur Hugging Face Spaces ?** Testé, mais
 l'hébergement Docker sur le tier gratuit "cpu-basic" de Hugging Face
 nécessite désormais un abonnement PRO (erreur 402 constatée en pratique) —
-hors périmètre de ce projet pédagogique. Le déploiement simulé dans le
-runner CI reste une vérification bout-en-bout complète (build, démarrage
-réel du conteneur, téléchargement réel du modèle, vraie requête HTTP), sans
-dépendance à un compte payant.
+hors périmètre de ce projet pédagogique.
+
+**Pourquoi `ghcr.io` plutôt qu'un service qui tourne en continu ?** Publier
+un service réellement accessible en permanence demanderait un hébergeur
+payant (comme HF Spaces PRO). `ghcr.io` reste gratuit (authentification
+via le `GITHUB_TOKEN` natif, aucun secret à créer) et donne un vrai
+artefact versionné et récupérable après chaque pipeline réussi — c'est
+la partie "build → test → **publie**" du CD ; faire tourner ce conteneur
+en continu quelque part resterait la suite logique si un hébergement était
+disponible.
 
 ## Qualité et limites
 

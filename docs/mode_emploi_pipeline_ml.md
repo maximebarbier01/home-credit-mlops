@@ -902,25 +902,32 @@ lancé** (pas seulement écrit — voir 15.7) :
 enchaînés (`needs:`), sur push/PR vers `main` :
 
 1. `lint-and-test` — `ruff check` + `pytest`, couvre aussi l'API ;
-2. `build-and-deploy` — construit l'image Docker puis la **déploie
-   réellement dans le runner GitHub Actions** (environnement cible
-   "simulé", au sens de la consigne) : conteneur lancé, `/health` interrogé
+2. `build-and-deploy` — construit l'image Docker, la teste **réellement**
+   dans le runner GitHub Actions (conteneur lancé, `/health` interrogé
    jusqu'à ce que le modèle soit chargé, puis `/predict` testé avec
-   [`tests/fixtures/sample_predict_payload.json`](../tests/fixtures/sample_predict_payload.json).
+   [`tests/fixtures/sample_predict_payload.json`](../tests/fixtures/sample_predict_payload.json)),
+   puis, **uniquement sur push vers `main`**, pousse l'image validée vers
+   le **GitHub Container Registry** (`ghcr.io/<owner>/<repo>:latest` et
+   `:${{ github.sha }}`), authentifié via le `GITHUB_TOKEN` natif d'Actions
+   (`permissions: packages: write`, aucun secret supplémentaire).
 
 **Pourquoi pas un déploiement réel sur Hugging Face Spaces ?** C'était le
 plan initial (job `deploy-to-hf-space`), testé en conditions réelles : la
 création du Space échoue avec une erreur `402 Payment Required` —
 l'hébergement Docker/Gradio sur le tier gratuit "cpu-basic" de Hugging Face
-nécessite désormais un abonnement PRO. Plutôt que de bloquer sur une
-dépendance payante hors périmètre pédagogique, le déploiement a été
-remplacé par un déploiement simulé dans le runner CI, qui reste une
-vérification bout-en-bout complète (build réel, démarrage réel du
-conteneur, téléchargement réel du modèle depuis Hugging Face Hub, vraie
-requête HTTP) sans nécessiter de compte payant. `scripts/export_model_for_serving.py`
-et la publication sur Hugging Face Hub (15.4) restent inchangés : c'est
-uniquement l'hébergement de l'API elle-même qui n'est plus déployé sur une
-plateforme externe.
+nécessite désormais un abonnement PRO. `scripts/export_model_for_serving.py`
+et la publication sur Hugging Face **Hub** (15.4, différent de Spaces)
+restent inchangés : c'est uniquement l'hébergement de l'API elle-même qui
+n'est pas déployé sur une plateforme externe payante.
+
+**Distinction importante, à ne pas confondre** : le job build-image + smoke
+test (démarrage réel du conteneur, requêtes HTTP réelles, puis conteneur
+détruit) est un **test d'intégration en CI**, pas un déploiement — rien ne
+persiste après. Le "D" du CD, lui, est réel : c'est le push vers `ghcr.io`,
+qui laisse un artefact versionné et récupérable après chaque pipeline
+réussi. Ce n'est toujours pas un service qui tourne en continu quelque
+part (ça demanderait un hébergeur payant) — juste la partie "build → test
+→ publie" du cycle, gratuite et automatisée.
 
 ### 15.7 Tests
 

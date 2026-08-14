@@ -39,16 +39,21 @@ jobs:
         run: poetry run pytest -q
 
   build-and-deploy:
-    # Environnement cible "simule" (au sens de la consigne) : le conteneur
-    # est construit puis reellement lance et interroge dans le runner
-    # GitHub Actions, y compris un vrai telechargement du modele depuis
-    # Hugging Face Hub (depot public, aucun secret requis). Le deploiement
-    # sur une plateforme externe (Hugging Face Spaces) n'est pas fait ici :
-    # l'hebergement Docker/Gradio y necessite un abonnement PRO sur le tier
-    # gratuit "cpu-basic" (erreur 402 constatee), ce qui sort du perimetre
-    # de ce projet pedagogique.
+    # Environnement cible "simule" (au sens de la consigne) pour le smoke
+    # test (conteneur reellement lance et interroge dans le runner GitHub
+    # Actions, y compris un vrai telechargement du modele depuis Hugging
+    # Face Hub, depot public, aucun secret requis). Le "D" du CD est
+    # ensuite reel : sur push vers main, l'image testee est poussee vers
+    # le GitHub Container Registry (ghcr.io), gratuit et authentifie via
+    # le GITHUB_TOKEN natif. Hugging Face Spaces (SDK Docker) a ete
+    # ecarte : l'hebergement y necessite un abonnement PRO sur le tier
+    # gratuit "cpu-basic" (erreur 402 constatee), hors perimetre de ce
+    # projet pedagogique.
     needs: lint-and-test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -101,3 +106,21 @@ jobs:
       - name: Stop container
         if: always()
         run: docker rm -f credit-api || true
+
+      - name: Log in to GitHub Container Registry
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image to GitHub Container Registry
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          docker tag home-credit-scoring-api:${{ github.sha }} "$IMAGE:${{ github.sha }}"
+          docker tag home-credit-scoring-api:${{ github.sha }} "$IMAGE:latest"
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"
+          echo "Deployed image: $IMAGE:latest"
