@@ -759,10 +759,12 @@ problème résolu.
 ## 15. Phase 10 : API de scoring et déploiement
 
 Module :
-[`src/home_credit_mlops/api/`](../src/home_credit_mlops/api/) —
-`model_loader.py` (téléchargement Hugging Face Hub + chargement MLflow),
-`schemas.py` (schéma Pydantic dynamique, validateurs métier, coercition de
-types), `main.py` (application FastAPI).
+[`app/`](../app/) — `main.py` (création de l'application), `api/routes.py`
+(routes HTTP), `schemas/prediction.py` (schéma Pydantic dynamique,
+validateurs métier, coercition de types), `services/model_service.py`
+(téléchargement Hugging Face Hub + chargement MLflow), `services/prediction_service.py`
+(orchestration métier), `db/` (journalisation SQLAlchemy), `core/`
+(configuration, sécurité, exceptions).
 
 ### 15.1 Pourquoi une API dédiée
 
@@ -771,8 +773,9 @@ pour un déploiement conteneurisé et documenté (besoin explicite de l'étape 2
 de la mission : "API fonctionnelle et déployable, Docker Ready"), une API
 FastAPI dédiée apporte : validation d'entrée avec règles métier, gestion
 d'erreurs propre (422 structuré / 500 générique sans fuite d'informations),
-documentation Swagger automatique, et une image Docker autonome ne
-dépendant pas de l'infrastructure MLflow locale au runtime.
+documentation Swagger automatique, journalisation optionnelle des prédictions
+pour le monitoring, et une image Docker autonome ne dépendant pas de
+l'infrastructure MLflow locale au runtime.
 
 ### 15.2 Schéma de requête dynamique
 
@@ -807,7 +810,7 @@ ambiguë, et une règle générique "tout numérique doit être positif" serait
 fausse — `DAYS_EMPLOYED` et `DAYS_BIRTH` sont légitimement négatifs dans ce
 dataset.
 
-Point technique non trivial : `main.py` utilise
+Point technique non trivial : `app/api/routes.py` utilise
 `from __future__ import annotations` (convention du projet), qui transforme
 les annotations de fonction en chaînes de caractères à la définition. Pour
 la route `/predict`, dont le type du payload n'existe qu'à l'exécution
@@ -823,14 +826,31 @@ attendu, ou un `object` contenant `None` là où un `float32` est attendu).
 `coerce_frame_dtypes` recale donc chaque colonne numérique sur le dtype
 numpy exact de la signature juste avant l'appel au modèle.
 
-### 15.3 Chargement du modèle : une seule fois, au démarrage
+### 15.3 Organisation FastAPI et chargement du modèle
 
 Exigence explicite de la consigne. Le modèle (~130 Mo) est téléchargé
 depuis un dépôt Hugging Face Hub via `huggingface_hub.snapshot_download`
 dans le `lifespan` FastAPI (`@asynccontextmanager`, pas le
 `@app.on_event("startup")` déprécié), stocké sur `app.state`, jamais
-rechargé par requête. La route `/predict` est enregistrée dynamiquement
-(`app.add_api_route`) après ce chargement, puisque son schéma en dépend.
+rechargé par requête.
+
+La structure reprend la logique d'un projet FastAPI industrialisable :
+
+- `app/main.py` crée l'application, configure le `lifespan`, les handlers
+  d'erreur, `/` et `/health`, puis inclut les routes ;
+- `app/api/routes.py` isole les endpoints HTTP via `APIRouter` ;
+- `app/schemas/prediction.py` porte les contrats Pydantic, les exemples
+  Swagger et les validateurs métier ;
+- `app/services/model_service.py` charge le modèle et exécute l'inférence ;
+- `app/services/prediction_service.py` orchestre scoring, latence et
+  journalisation ;
+- `app/db/` contient `database.py`, `models.py` et `repository.py` pour les
+  logs de production simulée ;
+- `app/core/` contient les éléments transverses : configuration, sécurité,
+  exceptions.
+
+La route `/predict` est enregistrée dynamiquement via un `APIRouter` après le
+chargement du modèle, puisque son schéma dépend de la signature MLflow.
 
 `create_app()` est une factory plutôt qu'une instance unique au niveau
 module : cela permet aux tests de construire une application isolée avec un
@@ -838,6 +858,25 @@ modèle factice injecté (`resolve_model`/`load_model` paramétrables), sans
 faire fuiter des routes enregistrées dynamiquement d'un test à l'autre.
 `app = create_app()` reste disponible au niveau module pour la convention
 uvicorn (`module:app`).
+
+Par défaut, les prédictions sont journalisées dans une base SQLite
+`artifacts/production_predictions.db`, via SQLAlchemy. Cette journalisation
+est volontairement non bloquante : si l'écriture échoue, la prédiction est
+quand même retournée. Deux variables d'environnement permettent d'adapter ce
+comportement :
+
+- `PREDICTION_LOGGING_ENABLED=false` pour désactiver la persistance ;
+- `PREDICTION_DB_URL=sqlite:////chemin/vers/prod.db` pour changer de base.
+
+`HOME_CREDIT_API_KEY` active une protection simple par header `X-API-Key`.
+Si cette variable n'est pas définie, l'API reste ouverte pour les tests et
+les démonstrations locales.
+
+La base peut être initialisée explicitement avec :
+
+```bash
+poetry run python scripts/init_production_db.py
+```
 
 ### 15.4 Publication du modèle sur Hugging Face Hub
 
@@ -880,7 +919,7 @@ lancé** (pas seulement écrit — voir 15.7) :
   `sqlite:///<cwd>/mlflow.db` (comportement par défaut de MLflow 3.x en
   l'absence de configuration explicite) — ce qui échoue si `/app` n'est
   pas inscriptible, et toucherait sinon le vrai `mlflow.db` du projet en
-  dev local. `model_loader.load_scoring_model` fixe désormais
+  dev local. `app/services/model_service.py::load_scoring_model` fixe désormais
   explicitement `mlflow.set_tracking_uri` vers un répertoire temporaire
   jetable avant de charger le modèle.
 - **Imports "eager" dans les `__init__.py` de packages** : dépickler
@@ -905,7 +944,7 @@ un seul job, ce qui rendait le "D" difficile à repérer) :
 **[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)** — sur push/PR
 vers `main` :
 
-1. `lint-and-test` — `ruff check` + `pytest`, couvre aussi l'API ;
+1. `lint-and-test` — `ruff check app scripts src tests` + `pytest`, couvre aussi l'API ;
 2. `build-and-test-image` — construit l'image Docker et la teste
    **réellement** dans le runner (conteneur lancé, `/health` interrogé
    jusqu'à ce que le modèle soit chargé, puis `/predict` testé avec
@@ -959,7 +998,8 @@ sans réseau. `test_api_schemas.py` couvre spécifiquement
 `plausible_range_validators` (flags binaires, scores EXT_SOURCE, heure de
 la demande, notes de région) sur des schémas MLflow réduits construits à la
 main. `test_api_real_model_smoke.py` (optionnel, ignoré par défaut) teste
-le vrai modèle publié, hors du job CI standard.
+le vrai modèle publié, hors du job CI standard. `test_api_repository.py`
+couvre la couche SQLAlchemy de journalisation des prédictions.
 
 L'ensemble des validateurs de bornes (`business_rule_validators` +
 `plausible_range_validators`) a aussi été vérifié directement contre le
@@ -978,6 +1018,7 @@ complet passe toujours de bout en bout.
 | [`scripts/register_champion_model.py`](../scripts/register_champion_model.py) | Réentraîne et enregistre rapidement le champion MLflow |
 | [`scripts/analyze_fairness.py`](../scripts/analyze_fairness.py) | Analyse la fairness (genre, tranche d'âge) du champion d'une campagne |
 | [`scripts/export_model_for_serving.py`](../scripts/export_model_for_serving.py) | Publie un modèle enregistré vers un dépôt Hugging Face Hub |
+| [`scripts/init_production_db.py`](../scripts/init_production_db.py) | Initialise la base SQLite de logs de prédiction API |
 | [`scripts/mlflow_ui.py`](../scripts/mlflow_ui.py) | Lance l'interface MLflow locale |
 
 ### Socle applicatif
@@ -1016,9 +1057,16 @@ complet passe toujours de bout en bout.
 
 | Fichier | Rôle |
 |---|---|
-| [`src/home_credit_mlops/api/model_loader.py`](../src/home_credit_mlops/api/model_loader.py) | Télécharge (Hugging Face Hub) et charge le modèle, une seule fois au démarrage |
-| [`src/home_credit_mlops/api/schemas.py`](../src/home_credit_mlops/api/schemas.py) | Schéma Pydantic dynamique, validateurs métier, coercition de dtypes |
-| [`src/home_credit_mlops/api/main.py`](../src/home_credit_mlops/api/main.py) | Application FastAPI : `/health`, `/predict`, gestion d'erreurs |
+| [`app/main.py`](../app/main.py) | Application FastAPI : lifespan, `/`, `/health`, handlers d'erreur |
+| [`app/api/routes.py`](../app/api/routes.py) | Routes HTTP et `APIRouter` de scoring |
+| [`app/schemas/prediction.py`](../app/schemas/prediction.py) | Schéma Pydantic dynamique, validateurs métier, exemples Swagger, coercition de dtypes |
+| [`app/services/model_service.py`](../app/services/model_service.py) | Télécharge (Hugging Face Hub), charge le modèle et exécute l'inférence |
+| [`app/services/prediction_service.py`](../app/services/prediction_service.py) | Orchestration : scoring, latence, journalisation non bloquante |
+| [`app/db/database.py`](../app/db/database.py) | Connexion SQLAlchemy et création des tables |
+| [`app/db/models.py`](../app/db/models.py) | Modèle SQLAlchemy `PredictionLog` |
+| [`app/db/repository.py`](../app/db/repository.py) | Ecriture des logs de prédiction |
+| [`app/core/config.py`](../app/core/config.py) | Configuration API via variables d'environnement |
+| [`app/core/security.py`](../app/core/security.py) | Protection optionnelle par `X-API-Key` |
 | [`Dockerfile`](../Dockerfile) | Image Docker de l'API (multi-stage, `python:3.12-slim`) |
 
 ### Tests
@@ -1029,7 +1077,7 @@ du modèle de serving, les métriques de fairness et l'API FastAPI (validation,
 prédiction, intégration MLflow).
 
 ```bash
-poetry run ruff check scripts src tests
+poetry run ruff check app scripts src tests
 poetry run pytest -q
 ```
 

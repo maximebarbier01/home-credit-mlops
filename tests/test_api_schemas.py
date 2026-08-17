@@ -8,7 +8,7 @@ import pytest
 from mlflow.types import ColSpec, DataType, Schema
 from pydantic import ValidationError
 
-from home_credit_mlops.api.schemas import (
+from app.schemas.prediction import (
     build_request_model,
     business_rule_validators,
     plausible_range_validators,

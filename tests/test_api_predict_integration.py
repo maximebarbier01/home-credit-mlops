@@ -9,7 +9,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 from mlflow.models import infer_signature
 
-from home_credit_mlops.api.main import create_app
+from app.main import create_app
 from home_credit_mlops.modeling.serving import CreditScoringModel
 
 
@@ -48,6 +48,8 @@ def test_predict_end_to_end_with_real_mlflow_model(tmp_path) -> None:
     app = create_app(
         resolve_model=lambda serving: model_dir,
         load_model=lambda local_dir: mlflow.pyfunc.load_model(local_dir.as_posix()),
+        prediction_repository=None,
+        init_prediction_storage=None,
     )
 
     with TestClient(app) as client:

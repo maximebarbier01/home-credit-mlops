@@ -1,30 +1,8 @@
-"""Schemas Pydantic de l'API : modèle de requête dynamique + réponse.
+"""Schemas Pydantic de prediction et validation d'entree.
 
-Le modèle MLflow attend 548 colonnes déjà calculées. Ecrire ces 548 champs
-à la main serait ingérable et impossible à maintenir en phase avec le
-modèle réellement chargé. Le modèle de requête est donc construit
-dynamiquement au démarrage, à partir de la signature MLflow du modèle
-chargé (voir build_request_model). Le type et le caractère obligatoire de
-CHACUN des 548 champs viennent directement de cette signature (Pydantic
-rejette donc deja tout champ requis manquant ou de mauvais type, sur les
-548 colonnes, pas seulement celles listées ci-dessous).
-
-En plus de ca, deux niveaux de validation de bornes explicites :
-
-- `business_rule_validators` : les champs cités nommement par la consigne
-  (age, revenu, montant du credit, taille du foyer) ;
-- `plausible_range_validators` : bornes connues et non ambigues d'après le
-  dictionnaire de données Home Credit (flags binaires, scores EXT_SOURCE
-  dans [0, 1], heure de la demande 0-23, notes de region 1-3...).
-
-Volontairement absent : une validation de bornes sur les ~500 colonnes
-restantes (agregats bureau/previous/installments/credit_card - sommes,
-moyennes, ratios). Contrairement aux catégories ci-dessus, elles n'ont pas
-de borne universelle non ambigue (une somme de crédits ou un ratio de
-paiement n'a pas de maximum métier fixe), et une règle générique "tout
-numérique doit être positif" serait fausse : DAYS_EMPLOYED, DAYS_BIRTH et
-les autres colonnes DAYS_* sont légitimement négatives dans ce dataset
-(nombre de jours avant la demande).
+La signature du modele MLflow reste la source de verite : le modele de
+requete FastAPI est construit dynamiquement au demarrage a partir des
+colonnes reellement attendues par le champion servi.
 """
 
 from __future__ import annotations
@@ -34,13 +12,10 @@ from typing import Any, Callable, Literal, Optional
 import mlflow.types
 import pandas as pd
 from mlflow.types import DataType
-from pydantic import BaseModel, create_model, field_validator
+from pydantic import BaseModel, ConfigDict, create_model, field_validator
 
 REQUEST_MODEL_NAME = "CreditScoringRequest"
 
-# Flags binaires (0 ou 1) d'apres le dictionnaire de donnees Home Credit.
-# FLAG_OWN_CAR / FLAG_OWN_REALTY sont exclus : ce sont des chaines "Y"/"N",
-# pas des entiers, dans la signature du modele.
 BINARY_FLAG_COLUMNS = [
     "FLAG_MOBIL",
     "FLAG_EMP_PHONE",
@@ -58,8 +33,6 @@ BINARY_FLAG_COLUMNS = [
     "DAYS_EMPLOYED_ANOM",
 ]
 
-# Scores EXT_SOURCE (et leurs agregats mean/min/max, qui restent dans le
-# meme intervalle) : normalises entre 0 et 1 par construction.
 EXT_SOURCE_UNIT_INTERVAL_COLUMNS = [
     "EXT_SOURCE_1",
     "EXT_SOURCE_2",
@@ -69,8 +42,19 @@ EXT_SOURCE_UNIT_INTERVAL_COLUMNS = [
     "EXT_SOURCES_MAX",
 ]
 
+PREDICTION_RESPONSE_EXAMPLE = {
+    "default_probability": 0.37,
+    "business_threshold": 0.220331353025222,
+    "predicted_default": 1,
+    "credit_decision": "refused",
+}
+
 
 class PredictionResponse(BaseModel):
+    """Reponse metier retournee par l'API."""
+
+    model_config = ConfigDict(json_schema_extra={"example": PREDICTION_RESPONSE_EXAMPLE})
+
     default_probability: float
     business_threshold: float
     predicted_default: int
@@ -78,9 +62,9 @@ class PredictionResponse(BaseModel):
 
 
 def _bounded_validator(field_name: str, *, predicate: Callable[[Any], bool], message: str):
-    """Construit un field_validator Pydantic pour un champ optionnel-safe."""
+    """Construit un validateur Pydantic pour une borne metier explicite."""
 
-    def _validate(cls, value):  # noqa: ANN001 - signature imposee par pydantic
+    def _validate(cls, value):  # noqa: ANN001 - signature imposee par Pydantic
         if value is not None and not predicate(value):
             raise ValueError(message)
         return value
@@ -89,20 +73,15 @@ def _bounded_validator(field_name: str, *, predicate: Callable[[Any], bool], mes
 
 
 def business_rule_validators() -> list[tuple[str, str, Any]]:
-    """Validateurs metier pour les champs explicitement testes par la consigne.
+    """Validateurs pour les champs explicitement cites par la consigne."""
 
-    Retourne une liste de (nom_de_champ_cible, nom_du_validateur, validateur).
-    Le nom de champ cible sert a ne garder, dans build_request_model, que les
-    validateurs dont le champ existe reellement dans la signature du modele
-    charge (create_model leve une erreur si on reference un champ absent).
-    """
     return [
         (
             "AGE_YEARS",
             "validate_age_years",
             _bounded_validator(
                 "AGE_YEARS",
-                predicate=lambda v: 18 <= v < 100,
+                predicate=lambda value: 18 <= value < 100,
                 message="AGE_YEARS must be between 18 and 100.",
             ),
         ),
@@ -111,7 +90,7 @@ def business_rule_validators() -> list[tuple[str, str, Any]]:
             "validate_income",
             _bounded_validator(
                 "AMT_INCOME_TOTAL",
-                predicate=lambda v: v > 0,
+                predicate=lambda value: value > 0,
                 message="AMT_INCOME_TOTAL must be strictly positive.",
             ),
         ),
@@ -120,7 +99,7 @@ def business_rule_validators() -> list[tuple[str, str, Any]]:
             "validate_credit_amount",
             _bounded_validator(
                 "AMT_CREDIT",
-                predicate=lambda v: v > 0,
+                predicate=lambda value: value > 0,
                 message="AMT_CREDIT must be strictly positive.",
             ),
         ),
@@ -129,7 +108,7 @@ def business_rule_validators() -> list[tuple[str, str, Any]]:
             "validate_children_count",
             _bounded_validator(
                 "CNT_CHILDREN",
-                predicate=lambda v: v >= 0,
+                predicate=lambda value: value >= 0,
                 message="CNT_CHILDREN cannot be negative.",
             ),
         ),
@@ -138,7 +117,7 @@ def business_rule_validators() -> list[tuple[str, str, Any]]:
             "validate_family_members",
             _bounded_validator(
                 "CNT_FAM_MEMBERS",
-                predicate=lambda v: v >= 0,
+                predicate=lambda value: value >= 0,
                 message="CNT_FAM_MEMBERS cannot be negative.",
             ),
         ),
@@ -146,12 +125,8 @@ def business_rule_validators() -> list[tuple[str, str, Any]]:
 
 
 def plausible_range_validators() -> list[tuple[str, str, Any]]:
-    """Validateurs de bornes connues et non ambigues (dictionnaire de donnees).
+    """Validateurs pour les bornes connues et non ambigues du dataset."""
 
-    Complementaire de business_rule_validators : ici, des categories entieres
-    de colonnes plutot que des champs isoles, generees programmatiquement
-    pour eviter de dupliquer un validateur quasi identique 33 fois.
-    """
     validators: list[tuple[str, str, Any]] = []
 
     for field_name in BINARY_FLAG_COLUMNS:
@@ -161,7 +136,7 @@ def plausible_range_validators() -> list[tuple[str, str, Any]]:
                 f"validate_binary_{field_name.lower()}",
                 _bounded_validator(
                     field_name,
-                    predicate=lambda v: v in (0, 1),
+                    predicate=lambda value: value in (0, 1),
                     message=f"{field_name} must be 0 or 1.",
                 ),
             )
@@ -174,34 +149,35 @@ def plausible_range_validators() -> list[tuple[str, str, Any]]:
                 f"validate_unit_interval_{field_name.lower()}",
                 _bounded_validator(
                     field_name,
-                    predicate=lambda v: 0.0 <= v <= 1.0,
+                    predicate=lambda value: 0.0 <= value <= 1.0,
                     message=f"{field_name} must be between 0 and 1.",
                 ),
             )
         )
 
-    validators.append(
-        (
-            "EXT_SOURCES_NA_COUNT",
-            "validate_ext_sources_na_count",
-            _bounded_validator(
+    validators.extend(
+        [
+            (
                 "EXT_SOURCES_NA_COUNT",
-                predicate=lambda v: 0 <= v <= 3,
-                message="EXT_SOURCES_NA_COUNT must be between 0 and 3.",
+                "validate_ext_sources_na_count",
+                _bounded_validator(
+                    "EXT_SOURCES_NA_COUNT",
+                    predicate=lambda value: 0 <= value <= 3,
+                    message="EXT_SOURCES_NA_COUNT must be between 0 and 3.",
+                ),
             ),
-        )
-    )
-    validators.append(
-        (
-            "HOUR_APPR_PROCESS_START",
-            "validate_hour_appr_process_start",
-            _bounded_validator(
+            (
                 "HOUR_APPR_PROCESS_START",
-                predicate=lambda v: 0 <= v <= 23,
-                message="HOUR_APPR_PROCESS_START must be between 0 and 23.",
+                "validate_hour_appr_process_start",
+                _bounded_validator(
+                    "HOUR_APPR_PROCESS_START",
+                    predicate=lambda value: 0 <= value <= 23,
+                    message="HOUR_APPR_PROCESS_START must be between 0 and 23.",
+                ),
             ),
-        )
+        ]
     )
+
     for field_name in ("REGION_RATING_CLIENT", "REGION_RATING_CLIENT_W_CITY"):
         validators.append(
             (
@@ -209,7 +185,7 @@ def plausible_range_validators() -> list[tuple[str, str, Any]]:
                 f"validate_{field_name.lower()}",
                 _bounded_validator(
                     field_name,
-                    predicate=lambda v: 1 <= v <= 3,
+                    predicate=lambda value: 1 <= value <= 3,
                     message=f"{field_name} must be between 1 and 3.",
                 ),
             )
@@ -218,11 +194,42 @@ def plausible_range_validators() -> list[tuple[str, str, Any]]:
     return validators
 
 
+def _example_value_for_col_spec(col_spec: mlflow.types.ColSpec) -> Any:
+    known_examples = {
+        "AGE_YEARS": 35.0,
+        "AMT_INCOME_TOTAL": 50_000.0,
+        "AMT_CREDIT": 200_000.0,
+        "CNT_CHILDREN": 1,
+        "CNT_FAM_MEMBERS": 3.0,
+        "CODE_GENDER": "F",
+    }
+    if col_spec.name in known_examples:
+        return known_examples[col_spec.name]
+    if col_spec.type == DataType.string:
+        return "example"
+    if col_spec.type in {DataType.integer, DataType.long}:
+        return 0
+    if col_spec.type == DataType.boolean:
+        return False
+    return 0.0
+
+
+def build_request_example(input_schema: mlflow.types.Schema) -> dict[str, Any]:
+    """Genere un exemple Swagger coherent avec la signature MLflow."""
+
+    return {
+        col_spec.name: _example_value_for_col_spec(col_spec)
+        for col_spec in input_schema.inputs
+        if col_spec.required
+    }
+
+
 def build_request_model(
     input_schema: mlflow.types.Schema,
     extra_validators: list[tuple[str, str, Any]] | None = None,
 ) -> type[BaseModel]:
-    """Construit dynamiquement le modele Pydantic de requete depuis la signature MLflow."""
+    """Construit dynamiquement le modele Pydantic de requete."""
+
     fields: dict[str, Any] = {}
     field_names: set[str] = set()
     for col_spec in input_schema.inputs:
@@ -242,27 +249,19 @@ def build_request_model(
     return create_model(
         REQUEST_MODEL_NAME,
         __base__=BaseModel,
+        __config__=ConfigDict(json_schema_extra={"example": build_request_example(input_schema)}),
         __validators__=applicable_validators,
         **fields,
     )
 
 
 def coerce_frame_dtypes(frame: pd.DataFrame, input_schema: mlflow.types.Schema) -> pd.DataFrame:
-    """Force chaque colonne numerique au dtype numpy exact attendu par MLflow.
+    """Force les dtypes attendus par la signature MLflow avant prediction."""
 
-    Necessaire car MLflow's schema enforcement (`PyFuncModel.predict`) refuse
-    toute conversion qu'il juge non-sure (ex. int64 -> int32), et un
-    DataFrame construit depuis un dict Python (via model_dump()) n'a pas
-    naturellement ces dtypes precis. Les colonnes string ne sont pas
-    recastees : le dtype "object" est deja ce que MLflow attend pour elles.
-    Les colonnes numeriques optionnelles absentes (None) sont converties en
-    NaN par .astype(), ce qui est le comportement souhaite (aucune des
-    colonnes optionnelles de ce modele n'est de type entier, qui ne peut pas
-    representer de valeur manquante).
-    """
     coerced = frame.copy()
     for col_spec in input_schema.inputs:
         if col_spec.type == DataType.string:
             continue
         coerced[col_spec.name] = coerced[col_spec.name].astype(col_spec.type.to_numpy())
     return coerced
+

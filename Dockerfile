@@ -1,6 +1,6 @@
 # Image d'API de scoring credit. Le modele (~130 Mo) n'est jamais embarque
 # ici : il est telecharge depuis Hugging Face Hub au demarrage du conteneur
-# (voir src/home_credit_mlops/api/model_loader.py). Cela garde l'image
+# (voir app/services/model_service.py). Cela garde l'image
 # legere et permet de promouvoir un nouveau champion sans reconstruire.
 
 FROM python:3.12-slim AS builder
@@ -18,6 +18,7 @@ RUN poetry install --only main,api --no-root --no-interaction
 # de ces fichiers pour s'installer.
 COPY README.md ./
 COPY src ./src
+COPY app ./app
 COPY configs ./configs
 RUN poetry install --only main,api --no-interaction
 
@@ -35,6 +36,7 @@ RUN useradd --create-home --uid 1000 appuser
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src ./src
+COPY --from=builder /app/app ./app
 COPY --from=builder /app/configs ./configs
 
 # Le modele est telecharge dans artifacts/hf_model_cache (chemin relatif a
@@ -51,4 +53,4 @@ USER appuser
 # sur le port 7860.
 EXPOSE 7860
 
-CMD ["uvicorn", "home_credit_mlops.api.main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]

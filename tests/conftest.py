@@ -70,11 +70,13 @@ def valid_payload() -> dict:
 @pytest.fixture
 def api_app(stub_model: StubScoringModel):
     """Construit une app FastAPI isolee avec un modele factice injecte (pas de reseau)."""
-    from home_credit_mlops.api.main import create_app
+    from app.main import create_app
 
     return create_app(
         resolve_model=lambda serving: Path("unused"),
         load_model=lambda local_dir: stub_model,
+        prediction_repository=None,
+        init_prediction_storage=None,
     )
 
 
@@ -92,7 +94,7 @@ def api_app_factory():
     veulent controler finement la reponse du modele factice."""
     from fastapi.testclient import TestClient
 
-    from home_credit_mlops.api.main import create_app
+    from app.main import create_app
 
     created_clients: list[TestClient] = []
 
@@ -100,6 +102,8 @@ def api_app_factory():
         app = create_app(
             resolve_model=lambda serving: Path("unused"),
             load_model=lambda local_dir: stub_model,
+            prediction_repository=None,
+            init_prediction_storage=None,
         )
         client = TestClient(app)
         client.__enter__()

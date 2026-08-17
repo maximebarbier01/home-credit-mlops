@@ -3,7 +3,7 @@
 Etape manuelle et deliberee, separee de `register_champion_model.py` :
 promouvoir un champion vers le registry local MLflow et le publier
 publiquement sur Hugging Face Hub (pour que l'API le telecharge au
-demarrage, voir `api/model_loader.py`) sont deux decisions distinctes.
+demarrage, voir `app/services/model_service.py`) sont deux decisions distinctes.
 """
 
 from __future__ import annotations

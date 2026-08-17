@@ -24,7 +24,10 @@ requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
-packages = [{ include = "home_credit_mlops", from = "src" }]
+packages = [
+    { include = "home_credit_mlops", from = "src" },
+    { include = "app" },
+]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.0"
@@ -43,6 +46,7 @@ openpyxl = ">=3.1.5,<4.0.0"
 fastapi = ">=0.138,<1.0"
 huggingface-hub = ">=1.20,<2.0"
 pydantic = ">=2.13,<3.0"
+sqlalchemy = ">=2.0,<3.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

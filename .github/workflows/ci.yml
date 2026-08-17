@@ -33,7 +33,7 @@ jobs:
         run: poetry install --no-interaction
 
       - name: Lint (ruff)
-        run: poetry run ruff check scripts src tests
+        run: poetry run ruff check app scripts src tests
 
       - name: Tests (pytest)
         run: poetry run pytest -q

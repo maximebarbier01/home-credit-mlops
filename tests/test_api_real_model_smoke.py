@@ -11,7 +11,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from home_credit_mlops.api.main import create_app
+from app.main import create_app
 from home_credit_mlops.settings import load_settings
 
 pytestmark = pytest.mark.skipif(

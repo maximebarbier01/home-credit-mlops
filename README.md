@@ -43,6 +43,7 @@ flowchart LR
 Le découpage suit un principe simple :
 
 - `scripts/` contient les points d'entrée exécutables ;
+- `app/` contient l'API FastAPI de production ;
 - `src/home_credit_mlops/` contient la logique réutilisable, testable et importable.
 
 ## Arborescence
@@ -50,6 +51,12 @@ Le découpage suit un principe simple :
 ```text
 home-credit-mlops/
 |-- .github/workflows/               # Pipeline CI/CD (lint, tests, build, deploy)
+|-- app/                             # API FastAPI de production
+|   |-- api/                         # Routes HTTP
+|   |-- core/                        # Config, sécurité, exceptions
+|   |-- db/                          # SQLAlchemy et logs de prédiction
+|   |-- schemas/                     # Schémas Pydantic et validateurs
+|   `-- services/                    # Chargement modèle et logique métier
 |-- configs/                         # Configuration TOML
 |-- data/
 |   |-- raw/                         # Données Kaggle non versionnées
@@ -58,7 +65,6 @@ home-credit-mlops/
 |-- docs/                            # Documentation détaillée
 |-- scripts/                         # Points d'entrée CLI
 |-- src/home_credit_mlops/
-|   |-- api/                         # API FastAPI (serving production)
 |   |-- data/                        # Construction du dataset
 |   |-- eda/                         # Diagnostics et visualisations
 |   |-- fairness/                    # Metriques et rapports de fairness
@@ -379,7 +385,7 @@ Le serving MLflow ci-dessus reste utile pour du débogage local rapide contre
 une version précise du registry. Pour un déploiement réel (le besoin exprimé
 par Chloé Dubois : "API fonctionnelle et déployable, Docker Ready"), le projet
 expose une API FastAPI dédiée dans
-[`src/home_credit_mlops/api/`](src/home_credit_mlops/api/), avec validation
+[`app/`](app/), avec validation
 des entrées, documentation Swagger automatique et chargement du modèle une
 seule fois au démarrage (jamais par requête).
 
@@ -389,6 +395,8 @@ seule fois au démarrage (jamais par requête).
   sans fuite d'informations internes sur une erreur inattendue) ;
 - validation métier explicite sur les champs sensibles (âge, revenu, montant
   du crédit, taille du foyer) — pas seulement un contrôle de type ;
+- journalisation optionnelle des prédictions dans une base SQLite/SQLAlchemy
+  pour alimenter le monitoring ;
 - image Docker autonome et déployable, sans dépendre de l'infrastructure
   MLflow locale (`mlflow.db`/`mlartifacts/`) au runtime.
 
@@ -422,11 +430,21 @@ légitimement négatifs dans ce dataset).
 ### Lancer l'API en local
 
 ```bash
-poetry run uvicorn home_credit_mlops.api.main:app --reload --port 8000
+poetry run uvicorn app.main:app --reload --port 8000
 ```
 
 Documentation interactive (Swagger) : <http://127.0.0.1:8000/docs>.
 Vérification de santé : `curl http://127.0.0.1:8000/health`.
+
+Par défaut, les prédictions sont journalisées dans
+`artifacts/production_predictions.db`. La variable d'environnement
+`PREDICTION_LOGGING_ENABLED=false` désactive cette persistance et
+`PREDICTION_DB_URL` permet de choisir une autre base compatible SQLAlchemy.
+La base peut aussi être initialisée explicitement avec :
+
+```bash
+poetry run python scripts/init_production_db.py
+```
 
 Au premier démarrage, le modèle est téléchargé depuis un dépôt Hugging Face
 Hub (`[serving]` dans `configs/default.toml`) — publié au préalable via :
@@ -502,7 +520,7 @@ Contrôles disponibles (exécutés automatiquement en CI, voir
 pull request vers `main`) :
 
 ```bash
-poetry run ruff check scripts src tests
+poetry run ruff check app scripts src tests
 poetry run pytest -q
 ```
 
