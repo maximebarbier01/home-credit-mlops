@@ -2,13 +2,41 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, FastAPI, Depends
+from fastapi import APIRouter, FastAPI, Depends, HTTPException, status
 
 from app.core.security import require_api_key
+from app.db.repository import get_monitoring_summary
+from app.schemas.monitoring import MonitoringSummaryResponse
 from app.schemas.prediction import PREDICTION_RESPONSE_EXAMPLE, PredictionResponse
 from app.services.prediction_service import PredictionService
 
 router = APIRouter()
+
+
+@router.get(
+    "/monitoring/summary",
+    response_model=MonitoringSummaryResponse,
+    tags=["monitoring"],
+    dependencies=[Depends(require_api_key)],
+    summary="Consulter le résumé opérationnel de l'API",
+    description=(
+        "Retourne un résumé léger calculé depuis la base de logs : volume "
+        "d'appels, taux d'erreur, latence, volume de prédictions et décisions."
+    ),
+    responses={
+        200: {"description": "Résumé de monitoring calculé avec succès."},
+        401: {"description": "Clé API absente ou invalide."},
+        503: {"description": "Base de monitoring non disponible."},
+    },
+)
+async def monitoring_summary() -> MonitoringSummaryResponse:
+    try:
+        return MonitoringSummaryResponse(**get_monitoring_summary())
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Monitoring database is not configured.",
+        ) from exc
 
 
 def build_predict_handler(request_model: type, prediction_service: PredictionService):
@@ -69,4 +97,3 @@ def register_prediction_routes(
 
     app.include_router(build_prediction_router(request_model, prediction_service))
     app.state.prediction_routes_registered = True
-

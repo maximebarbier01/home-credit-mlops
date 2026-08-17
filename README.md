@@ -62,6 +62,7 @@ home-credit-mlops/
 |   |-- raw/                         # Données Kaggle non versionnées
 |   |-- interim/                     # Données intermédiaires
 |   `-- processed/                   # Datasets prêts pour le modèle
+|-- dashboard/                       # Dashboard Streamlit de monitoring
 |-- docs/                            # Documentation détaillée
 |-- scripts/                         # Points d'entrée CLI
 |-- src/home_credit_mlops/
@@ -548,6 +549,40 @@ explicables : PSI, KS test, variation de taux de valeurs manquantes. Si le
 volume de production est trop faible, le niveau de drift est marqué
 `insufficient_data` plutôt que sur-interprété.
 
+### Démo locale du monitoring
+
+1. Démarrer l'API :
+
+```bash
+poetry run uvicorn app.main:app --reload --port 8000
+```
+
+2. Simuler du trafic de production depuis `test_features.parquet` :
+
+```bash
+poetry run python scripts/simulate_production_requests.py \
+  --sample-size 100 \
+  --invalid-requests 3
+```
+
+3. Consulter le résumé opérationnel exposé par l'API :
+
+```bash
+curl -s http://127.0.0.1:8000/monitoring/summary | python -m json.tool
+```
+
+4. Exporter les logs bruts stockés en base :
+
+```bash
+poetry run python scripts/export_production_logs.py
+```
+
+5. Ouvrir le dashboard Streamlit :
+
+```bash
+poetry run streamlit run dashboard/monitoring_app.py
+```
+
 ## Qualité et limites
 
 Contrôles disponibles (exécutés automatiquement en CI, voir
@@ -555,7 +590,7 @@ Contrôles disponibles (exécutés automatiquement en CI, voir
 pull request vers `main`) :
 
 ```bash
-poetry run ruff check app scripts src tests
+poetry run ruff check app dashboard scripts src tests
 poetry run pytest -q
 ```
 
@@ -563,7 +598,8 @@ Limites à conserver dans l'analyse :
 
 - le rapport de coût `FN/FP = 10` constitue une hypothèse pédagogique à valider avec le métier ;
 - le tracking et le registry reposent actuellement sur une infrastructure locale ;
-- la surveillance en production et la dérive des données restent hors du périmètre actuel ;
+- le monitoring est un PoC local basé sur SQLite ; en production réelle,
+  PostgreSQL, une politique de rétention et une revue RGPD seraient nécessaires ;
 - les artefacts locaux et les données brutes ne sont pas stockés dans Git ;
 - l'analyse de fairness (`scripts/analyze_fairness.py`) remonte des écarts significatifs par
   genre et par tranche d'âge sur le champion actuel, non encore traités.

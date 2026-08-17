@@ -1041,7 +1041,7 @@ Variables utiles :
 
 ### 16.2 Analyse automatique
 
-Commande principale :
+Commande principale du rapport automatique :
 
 ```bash
 poetry run python scripts/analyze_production_monitoring.py
@@ -1064,6 +1064,49 @@ Le classeur Excel contient les onglets `api_summary`, `prediction_summary`,
 `operational_alerts`, `status_code_summary`, `latency_by_path`,
 `drift_summary`, `numeric_drift`, `categorical_drift`, ainsi que des extraits
 des logs.
+
+Pour générer des logs localement sans attendre un vrai trafic utilisateur :
+
+```bash
+poetry run uvicorn app.main:app --reload --port 8000
+poetry run python scripts/simulate_production_requests.py \
+  --sample-size 100 \
+  --invalid-requests 3
+```
+
+`scripts/simulate_production_requests.py` lit `data/processed/test_features.parquet`,
+retire les colonnes non attendues par le modèle (`SK_ID_CURR`, `TARGET`), puis
+envoie les clients vers `/predict`. L'option `--invalid-requests` ajoute
+quelques payloads volontairement invalides afin de tester la journalisation des
+erreurs `422`.
+
+Un export brut des logs stockés est également disponible :
+
+```bash
+poetry run python scripts/export_production_logs.py
+```
+
+Ce script produit un classeur Excel avec `api_call_logs`, `prediction_logs`,
+`production_inputs` et `production_outputs`. Il sert de preuve simple de la
+solution de stockage et peut être montré pendant l'évaluation.
+
+L'API expose aussi un endpoint de résumé léger :
+
+```bash
+curl -s http://127.0.0.1:8000/monitoring/summary | python -m json.tool
+```
+
+Ce endpoint retourne les volumes, taux d'erreur, latences, compte de
+prédictions et distribution des décisions sans ouvrir SQLite.
+
+Dashboard local :
+
+```bash
+poetry run streamlit run dashboard/monitoring_app.py
+```
+
+Le dashboard Streamlit lit la même base SQLite et propose quatre onglets :
+opérations, scores, data drift et logs bruts.
 
 ### 16.3 Métriques calculées
 
@@ -1117,6 +1160,8 @@ PostgreSQL sans changer la logique de monitoring.
 | [`scripts/export_model_for_serving.py`](../scripts/export_model_for_serving.py) | Publie un modèle enregistré vers un dépôt Hugging Face Hub |
 | [`scripts/init_production_db.py`](../scripts/init_production_db.py) | Initialise la base SQLite de logs de prédiction API |
 | [`scripts/analyze_production_monitoring.py`](../scripts/analyze_production_monitoring.py) | Génère le rapport de monitoring production et data drift |
+| [`scripts/simulate_production_requests.py`](../scripts/simulate_production_requests.py) | Envoie un échantillon de clients vers l'API pour simuler du trafic |
+| [`scripts/export_production_logs.py`](../scripts/export_production_logs.py) | Exporte les logs bruts de production dans un classeur Excel |
 | [`scripts/mlflow_ui.py`](../scripts/mlflow_ui.py) | Lance l'interface MLflow locale |
 
 ### Socle applicatif
@@ -1127,6 +1172,7 @@ PostgreSQL sans changer la logique de monitoring.
 | [`src/home_credit_mlops/logging_utils.py`](../src/home_credit_mlops/logging_utils.py) | Configure les logs Python |
 | [`src/home_credit_mlops/mlflow_utils.py`](../src/home_credit_mlops/mlflow_utils.py) | Configure MLflow, le registry et l'UI |
 | [`src/home_credit_mlops/reporting/campaign_lookup.py`](../src/home_credit_mlops/reporting/campaign_lookup.py) | Retrouve le champion d'une campagne depuis `campaign_metadata.json` |
+| [`dashboard/monitoring_app.py`](../dashboard/monitoring_app.py) | Dashboard Streamlit local du monitoring production |
 
 ### Données et EDA
 
@@ -1161,6 +1207,7 @@ PostgreSQL sans changer la logique de monitoring.
 |---|---|
 | [`app/main.py`](../app/main.py) | Application FastAPI : lifespan, `/`, `/health`, handlers d'erreur |
 | [`app/api/routes.py`](../app/api/routes.py) | Routes HTTP et `APIRouter` de scoring |
+| [`app/schemas/monitoring.py`](../app/schemas/monitoring.py) | Schéma de réponse de `/monitoring/summary` |
 | [`app/schemas/prediction.py`](../app/schemas/prediction.py) | Schéma Pydantic dynamique, validateurs métier, exemples Swagger, coercition de dtypes |
 | [`app/services/model_service.py`](../app/services/model_service.py) | Télécharge (Hugging Face Hub), charge le modèle et exécute l'inférence |
 | [`app/services/prediction_service.py`](../app/services/prediction_service.py) | Orchestration : scoring, latence, journalisation non bloquante |
@@ -1179,7 +1226,7 @@ du modèle de serving, les métriques de fairness et l'API FastAPI (validation,
 prédiction, intégration MLflow).
 
 ```bash
-poetry run ruff check app scripts src tests
+poetry run ruff check app dashboard scripts src tests
 poetry run pytest -q
 ```
 

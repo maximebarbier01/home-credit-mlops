@@ -38,9 +38,17 @@ def test_api_logs_success_and_validation_error(
         invalid_payload = dict(valid_payload)
         del invalid_payload["AMT_INCOME_TOTAL"]
         invalid_response = client.post("/predict", json=invalid_payload)
+        summary_response = client.get("/monitoring/summary")
 
     assert valid_response.status_code == 200
     assert invalid_response.status_code == 422
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert summary["total_api_calls"] == 2
+    assert summary["predict_calls"] == 2
+    assert summary["error_calls"] == 1
+    assert summary["prediction_count"] == 1
+    assert summary["decision_counts"] == {"refused": 1}
 
     with SessionLocal() as session:
         api_logs = session.scalars(
