@@ -1,0 +1,59 @@
+name: CD
+
+# Se declenche uniquement quand le workflow CI se termine (succes ou echec)
+# sur main. C'est le mecanisme standard pour enchainer deux workflows
+# distincts : `needs:` ne fonctionne qu'entre jobs d'un meme fichier, donc
+# workflow_run + la verification explicite de `conclusion == 'success'`
+# ci-dessous reproduisent la meme garantie ("deployer seulement si le CI a
+# reussi") a travers deux fichiers separes. Le filtre `branches: [main]`
+# exclut deja les executions du CI declenchees par une pull request (qui
+# tournent sur la branche de la PR, pas sur main).
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Rebuild the CI-tested image from shared cache
+        # Reconstruit la meme image que ci.yml a deja construite et testee
+        # (meme cache GHA, cache-from seul : aucun nouveau cache ecrit
+        # ici). Avec un cache chaud, c'est quasi instantane, pas une
+        # vraie recompilation.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: home-credit-scoring-api:${{ github.event.workflow_run.head_sha }}
+          cache-from: type=gha
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image to GitHub Container Registry
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          docker tag home-credit-scoring-api:"$SHA" "$IMAGE:$SHA"
+          docker tag home-credit-scoring-api:"$SHA" "$IMAGE:latest"
+          docker push "$IMAGE:$SHA"
+          docker push "$IMAGE:latest"
+          echo "Deployed image: $IMAGE:latest"

@@ -38,22 +38,15 @@ jobs:
       - name: Tests (pytest)
         run: poetry run pytest -q
 
-  build-and-deploy:
-    # Environnement cible "simule" (au sens de la consigne) pour le smoke
-    # test (conteneur reellement lance et interroge dans le runner GitHub
-    # Actions, y compris un vrai telechargement du modele depuis Hugging
-    # Face Hub, depot public, aucun secret requis). Le "D" du CD est
-    # ensuite reel : sur push vers main, l'image testee est poussee vers
-    # le GitHub Container Registry (ghcr.io), gratuit et authentifie via
-    # le GITHUB_TOKEN natif. Hugging Face Spaces (SDK Docker) a ete
-    # ecarte : l'hebergement y necessite un abonnement PRO sur le tier
-    # gratuit "cpu-basic" (erreur 402 constatee), hors perimetre de ce
-    # projet pedagogique.
+  build-and-test-image:
+    # Partie CI : construit l'image et la teste reellement (conteneur
+    # lance, /health interroge jusqu'a chargement du vrai modele depuis
+    # Hugging Face Hub, /predict teste) dans le runner GitHub Actions. Ne
+    # deploie rien : c'est un test d'integration, pas un deploiement. Le
+    # "D" (push vers GitHub Container Registry) vit dans cd.yml, declenche
+    # uniquement si ce job reussit sur main (voir workflow_run dans cd.yml).
     needs: lint-and-test
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -66,6 +59,11 @@ jobs:
           push: false
           load: true
           tags: home-credit-scoring-api:${{ github.sha }}
+          # Cache partage avec cd.yml (meme backend GHA) : cd.yml
+          # reconstruit la meme image a partir de ce cache plutot que de
+          # tout recompiler, tout en restant un fichier de workflow separe.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Run container (target environment)
         run: |
@@ -106,21 +104,3 @@ jobs:
       - name: Stop container
         if: always()
         run: docker rm -f credit-api || true
-
-      - name: Log in to GitHub Container Registry
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Push image to GitHub Container Registry
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: |
-          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
-          docker tag home-credit-scoring-api:${{ github.sha }} "$IMAGE:${{ github.sha }}"
-          docker tag home-credit-scoring-api:${{ github.sha }} "$IMAGE:latest"
-          docker push "$IMAGE:${{ github.sha }}"
-          docker push "$IMAGE:latest"
-          echo "Deployed image: $IMAGE:latest"

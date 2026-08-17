@@ -456,17 +456,31 @@ curl -s -X POST http://127.0.0.1:8000/predict \
 
 ### CI/CD
 
-Le pipeline [`.github/workflows/ci.yml`](.github/workflows/ci.yml) enchaîne
-deux jobs sur chaque push/PR vers `main` :
+Deux fichiers de workflow séparés, pour une frontière CI/CD sans ambiguïté :
+
+**[`.github/workflows/ci.yml`](.github/workflows/ci.yml)** — sur chaque push/PR vers `main` :
 
 1. `lint-and-test` — `ruff check` puis `pytest` (couvre aussi l'API) ;
-2. `build-and-deploy` — construit l'image Docker, la teste **réellement**
-   dans le runner GitHub Actions (conteneur lancé, `/health` interrogé
-   jusqu'à ce que le vrai modèle — public sur Hugging Face Hub — soit
-   chargé, puis `/predict` testé avec le payload d'exemple ci-dessus), puis,
-   **uniquement sur push vers `main`**, pousse l'image validée vers le
-   **GitHub Container Registry** (`ghcr.io/<owner>/<repo>:latest`), le
-   volet "déploiement" du pipeline.
+2. `build-and-test-image` — construit l'image Docker et la teste
+   **réellement** dans le runner GitHub Actions (conteneur lancé, `/health`
+   interrogé jusqu'à ce que le vrai modèle — public sur Hugging Face Hub —
+   soit chargé, puis `/predict` testé avec le payload d'exemple ci-dessus).
+   Un test d'intégration complet, mais rien n'est déployé : le conteneur est
+   détruit à la fin.
+
+**[`.github/workflows/cd.yml`](.github/workflows/cd.yml)** — se déclenche
+via `workflow_run` uniquement quand `ci.yml` **réussit sur `main`**
+(`needs:` ne fonctionne qu'entre jobs d'un même fichier ; `workflow_run` +
+la vérification de `conclusion == 'success'` reproduisent la même garantie
+entre deux fichiers). Reconstruit l'image à partir du cache déjà chaud
+(partagé via le cache GitHub Actions, `cache-from`/`cache-to: type=gha` —
+donc quasi instantané, pas une vraie recompilation), puis la pousse vers le
+**GitHub Container Registry** (`ghcr.io/<owner>/<repo>:latest`,
+authentification via le `GITHUB_TOKEN` natif, aucun secret à créer).
+
+⚠️ `workflow_run` ne s'active qu'une fois `cd.yml` présent sur `main` : le
+tout premier push qui l'ajoute ne déclenche pas encore le CD, les pushes
+suivants oui.
 
 **Pourquoi pas un déploiement réel sur Hugging Face Spaces ?** Testé, mais
 l'hébergement Docker sur le tier gratuit "cpu-basic" de Hugging Face
@@ -475,8 +489,7 @@ hors périmètre de ce projet pédagogique.
 
 **Pourquoi `ghcr.io` plutôt qu'un service qui tourne en continu ?** Publier
 un service réellement accessible en permanence demanderait un hébergeur
-payant (comme HF Spaces PRO). `ghcr.io` reste gratuit (authentification
-via le `GITHUB_TOKEN` natif, aucun secret à créer) et donne un vrai
+payant (comme HF Spaces PRO). `ghcr.io` reste gratuit et donne un vrai
 artefact versionné et récupérable après chaque pipeline réussi — c'est
 la partie "build → test → **publie**" du CD ; faire tourner ce conteneur
 en continu quelque part resterait la suite logique si un hébergement était

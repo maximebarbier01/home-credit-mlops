@@ -898,36 +898,55 @@ lancé** (pas seulement écrit — voir 15.7) :
 
 ### 15.6 CI/CD
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) : deux jobs
-enchaînés (`needs:`), sur push/PR vers `main` :
+Deux fichiers de workflow distincts, pour une frontière CI/CD explicite
+(demandé en revue : le premier jet mélangeait build/test/déploiement dans
+un seul job, ce qui rendait le "D" difficile à repérer) :
+
+**[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)** — sur push/PR
+vers `main` :
 
 1. `lint-and-test` — `ruff check` + `pytest`, couvre aussi l'API ;
-2. `build-and-deploy` — construit l'image Docker, la teste **réellement**
-   dans le runner GitHub Actions (conteneur lancé, `/health` interrogé
+2. `build-and-test-image` — construit l'image Docker et la teste
+   **réellement** dans le runner (conteneur lancé, `/health` interrogé
    jusqu'à ce que le modèle soit chargé, puis `/predict` testé avec
-   [`tests/fixtures/sample_predict_payload.json`](../tests/fixtures/sample_predict_payload.json)),
-   puis, **uniquement sur push vers `main`**, pousse l'image validée vers
-   le **GitHub Container Registry** (`ghcr.io/<owner>/<repo>:latest` et
-   `:${{ github.sha }}`), authentifié via le `GITHUB_TOKEN` natif d'Actions
-   (`permissions: packages: write`, aucun secret supplémentaire).
+   [`tests/fixtures/sample_predict_payload.json`](../tests/fixtures/sample_predict_payload.json)).
+   Test d'intégration complet, mais **rien n'est déployé** — le conteneur
+   est détruit en fin de job (`docker rm -f`). Le cache de build est écrit
+   dans le cache GitHub Actions (`cache-to: type=gha,mode=max`) pour être
+   réutilisé par `cd.yml`.
+
+**[`.github/workflows/cd.yml`](../.github/workflows/cd.yml)** — job unique
+`deploy`, déclenché par `workflow_run` quand `ci.yml` se termine sur
+`main`, filtré sur `conclusion == 'success'`. `needs:` ne fonctionne
+qu'entre jobs d'un même fichier ; `workflow_run` est le mécanisme standard
+pour reproduire la même garantie ("ne déployer que si le CI a réussi")
+entre deux fichiers séparés. Reconstruit l'image à partir du cache GHA déjà
+chaud (`cache-from: type=gha`, sans `cache-to` — quasi instantané, pas une
+vraie recompilation), puis la pousse vers le **GitHub Container Registry**
+(`ghcr.io/<owner>/<repo>:latest` et `:<sha>`), authentifié via le
+`GITHUB_TOKEN` natif d'Actions (`permissions: packages: write`, aucun
+secret supplémentaire).
+
+⚠️ `workflow_run` ne s'active que pour un fichier déjà présent sur la
+branche par défaut : le tout premier push ajoutant `cd.yml` ne déclenche
+pas encore le déploiement, les suivants oui.
 
 **Pourquoi pas un déploiement réel sur Hugging Face Spaces ?** C'était le
-plan initial (job `deploy-to-hf-space`), testé en conditions réelles : la
-création du Space échoue avec une erreur `402 Payment Required` —
-l'hébergement Docker/Gradio sur le tier gratuit "cpu-basic" de Hugging Face
-nécessite désormais un abonnement PRO. `scripts/export_model_for_serving.py`
-et la publication sur Hugging Face **Hub** (15.4, différent de Spaces)
-restent inchangés : c'est uniquement l'hébergement de l'API elle-même qui
-n'est pas déployé sur une plateforme externe payante.
+plan initial, testé en conditions réelles : la création du Space échoue
+avec une erreur `402 Payment Required` — l'hébergement Docker/Gradio sur le
+tier gratuit "cpu-basic" de Hugging Face nécessite désormais un abonnement
+PRO. `scripts/export_model_for_serving.py` et la publication sur Hugging
+Face **Hub** (15.4, différent de Spaces) restent inchangés : c'est
+uniquement l'hébergement de l'API elle-même qui n'est pas déployé sur une
+plateforme externe payante.
 
-**Distinction importante, à ne pas confondre** : le job build-image + smoke
-test (démarrage réel du conteneur, requêtes HTTP réelles, puis conteneur
-détruit) est un **test d'intégration en CI**, pas un déploiement — rien ne
-persiste après. Le "D" du CD, lui, est réel : c'est le push vers `ghcr.io`,
-qui laisse un artefact versionné et récupérable après chaque pipeline
-réussi. Ce n'est toujours pas un service qui tourne en continu quelque
-part (ça demanderait un hébergeur payant) — juste la partie "build → test
-→ publie" du cycle, gratuite et automatisée.
+**Distinction à ne pas confondre** : `ci.yml` (build + smoke test, conteneur
+détruit ensuite) est un test d'intégration, pas un déploiement — rien ne
+persiste après. Le "D" du CD vit entièrement dans `cd.yml` : c'est le push
+vers `ghcr.io` qui laisse un artefact versionné et récupérable après chaque
+pipeline réussi. Ce n'est toujours pas un service qui tourne en continu
+quelque part (ça demanderait un hébergeur payant) — juste la partie
+"build → test → publie" du cycle, gratuite et automatisée.
 
 ### 15.7 Tests
 
