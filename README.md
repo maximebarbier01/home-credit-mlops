@@ -130,7 +130,7 @@ Le fichier [`configs/default.toml`](configs/default.toml) centralise notamment :
 | `training` | `cv_folds` | `5` | Nombre de plis de validation croisée |
 | `training` | `n_jobs` | `1` | Nombre de processus parallèles |
 | `mlflow` | `experiment_name` | `home-credit-scoring` | Nom de l'expérience MLflow |
-| `serving` | `model_repo_id` | *(à définir)* | Dépôt Hugging Face Hub du modèle servi par l'API |
+| `serving` | `model_repo_id` | `mxmbrbr/home-credit-mlops` | Dépôt Hugging Face Hub du modèle servi par l'API |
 | `serving` | `revision` | `main` | Révision du dépôt HF Hub à télécharger |
 
 ## Exécution du pipeline
