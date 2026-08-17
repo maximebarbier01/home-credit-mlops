@@ -15,11 +15,26 @@ from urllib.request import Request, urlopen
 import numpy as np
 import pandas as pd
 
+from app.schemas.prediction import BINARY_FLAG_COLUMNS, EXT_SOURCE_UNIT_INTERVAL_COLUMNS
 from home_credit_mlops.data.io import read_table
 from home_credit_mlops.logging_utils import configure_logging
 from home_credit_mlops.settings import load_settings
 
 LOGGER = logging.getLogger(__name__)
+DROP_COLUMNS = {"SK_ID_CURR", "TARGET"}
+POSITIVE_NUMERIC_DEFAULTS = {
+    "AMT_INCOME_TOTAL": 50_000.0,
+    "AMT_CREDIT": 200_000.0,
+}
+SAFE_NUMERIC_DEFAULTS = {
+    "AGE_YEARS": 35.0,
+    "CNT_CHILDREN": 0,
+    "CNT_FAM_MEMBERS": 1.0,
+    "EXT_SOURCES_NA_COUNT": 0,
+    "HOUR_APPR_PROCESS_START": 12,
+    "REGION_RATING_CLIENT": 2,
+    "REGION_RATING_CLIENT_W_CITY": 2,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,11 +82,94 @@ def _to_jsonable(value: Any) -> Any:
 
 def _row_to_payload(row: pd.Series, *, drop_columns: set[str]) -> dict[str, Any]:
     payload = {
-        column: _to_jsonable(value)
-        for column, value in row.items()
-        if column not in drop_columns
+        column: _to_jsonable(value) for column, value in row.items() if column not in drop_columns
     }
     return payload
+
+
+def _fallback_for_column(series: pd.Series) -> Any:
+    """Calcule une valeur de repli stable pour produire un payload valide."""
+
+    if pd.api.types.is_bool_dtype(series):
+        return False
+    if pd.api.types.is_numeric_dtype(series):
+        finite_values = series.replace([np.inf, -np.inf], np.nan).dropna()
+        if finite_values.empty:
+            return 0.0
+        return finite_values.median()
+
+    mode = series.dropna().mode()
+    if mode.empty:
+        return "missing"
+    return mode.iloc[0]
+
+
+def _enforce_business_safe_values(frame: pd.DataFrame) -> pd.DataFrame:
+    """Aligne les donnees simulees avec les validations metier de l'API."""
+
+    cleaned = frame.copy()
+
+    for column, default in POSITIVE_NUMERIC_DEFAULTS.items():
+        if column in cleaned:
+            values = pd.to_numeric(cleaned[column], errors="coerce")
+            cleaned[column] = values.where(values > 0, default)
+
+    if "AGE_YEARS" in cleaned:
+        values = pd.to_numeric(cleaned["AGE_YEARS"], errors="coerce")
+        cleaned["AGE_YEARS"] = values.where(
+            (values >= 18) & (values < 100),
+            SAFE_NUMERIC_DEFAULTS["AGE_YEARS"],
+        )
+
+    for column in ("CNT_CHILDREN", "CNT_FAM_MEMBERS"):
+        if column in cleaned:
+            values = pd.to_numeric(cleaned[column], errors="coerce")
+            cleaned[column] = values.where(values >= 0, SAFE_NUMERIC_DEFAULTS[column])
+
+    if "EXT_SOURCES_NA_COUNT" in cleaned:
+        values = pd.to_numeric(cleaned["EXT_SOURCES_NA_COUNT"], errors="coerce")
+        cleaned["EXT_SOURCES_NA_COUNT"] = values.where(
+            (values >= 0) & (values <= 3),
+            SAFE_NUMERIC_DEFAULTS["EXT_SOURCES_NA_COUNT"],
+        )
+
+    if "HOUR_APPR_PROCESS_START" in cleaned:
+        values = pd.to_numeric(cleaned["HOUR_APPR_PROCESS_START"], errors="coerce")
+        cleaned["HOUR_APPR_PROCESS_START"] = values.where(
+            (values >= 0) & (values <= 23),
+            SAFE_NUMERIC_DEFAULTS["HOUR_APPR_PROCESS_START"],
+        )
+
+    for column in ("REGION_RATING_CLIENT", "REGION_RATING_CLIENT_W_CITY"):
+        if column in cleaned:
+            values = pd.to_numeric(cleaned[column], errors="coerce")
+            cleaned[column] = values.where(
+                (values >= 1) & (values <= 3), SAFE_NUMERIC_DEFAULTS[column]
+            )
+
+    for column in set(BINARY_FLAG_COLUMNS).intersection(cleaned.columns):
+        values = pd.to_numeric(cleaned[column], errors="coerce").fillna(0)
+        cleaned[column] = np.where(values >= 0.5, 1, 0)
+
+    for column in set(EXT_SOURCE_UNIT_INTERVAL_COLUMNS).intersection(cleaned.columns):
+        values = pd.to_numeric(cleaned[column], errors="coerce")
+        cleaned[column] = values.clip(lower=0.0, upper=1.0).fillna(0.0)
+
+    return cleaned
+
+
+def _prepare_valid_simulation_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Nettoie les inputs avant simulation pour eviter des erreurs 422 non voulues."""
+
+    features = frame.drop(
+        columns=[column for column in DROP_COLUMNS if column in frame.columns]
+    ).copy()
+    features = features.replace([np.inf, -np.inf], np.nan)
+
+    for column in features.columns:
+        features[column] = features[column].fillna(_fallback_for_column(features[column]))
+
+    return _enforce_business_safe_values(features)
 
 
 def _post_json(
@@ -127,12 +225,12 @@ def _build_payloads(
     if frame.empty:
         return []
 
-    sample = frame.sample(
+    valid_features = _prepare_valid_simulation_frame(frame)
+    sample = valid_features.sample(
         n=min(sample_size, len(frame)),
         random_state=random_state,
     )
-    drop_columns = {"SK_ID_CURR", "TARGET"}
-    payloads = [_row_to_payload(row, drop_columns=drop_columns) for _, row in sample.iterrows()]
+    payloads = [_row_to_payload(row, drop_columns=DROP_COLUMNS) for _, row in sample.iterrows()]
 
     for index in range(min(invalid_requests, len(payloads))):
         invalid_payload = dict(payloads[index])

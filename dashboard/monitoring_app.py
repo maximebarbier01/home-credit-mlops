@@ -35,7 +35,9 @@ def load_monitoring_tables(database_url: str) -> tuple[pd.DataFrame, pd.DataFram
 
 
 @st.cache_data(show_spinner=False)
-def load_reference_features(reference_path: str, target_column: str, id_column: str) -> pd.DataFrame:
+def load_reference_features(
+    reference_path: str, target_column: str, id_column: str
+) -> pd.DataFrame:
     reference = read_table(reference_path)
     return reference.drop(
         columns=[column for column in (target_column, id_column) if column in reference.columns],
@@ -68,7 +70,7 @@ def _render_operational_tab(api_calls: pd.DataFrame, predictions: pd.DataFrame) 
 
     if not alerts.empty:
         st.warning("Alertes opérationnelles détectées")
-        st.dataframe(alerts, use_container_width=True)
+        st.dataframe(alerts, width="stretch")
     else:
         st.success("Aucune alerte opérationnelle sur les seuils configurés.")
 
@@ -79,14 +81,16 @@ def _render_operational_tab(api_calls: pd.DataFrame, predictions: pd.DataFrame) 
         st.bar_chart(status_summary.set_index("status_code")["count"])
 
     st.subheader("Latence par endpoint")
-    st.dataframe(latency_by_path, use_container_width=True)
+    st.dataframe(latency_by_path, width="stretch")
 
 
 def _render_predictions_tab(predictions: pd.DataFrame) -> None:
     prediction_summary = compute_prediction_summary(predictions)
     col1, col2, col3 = st.columns(3)
     col1.metric("Taux de refus", f"{_metric_value(prediction_summary, 'refused_rate'):.1%}")
-    col2.metric("Score moyen", f"{_metric_value(prediction_summary, 'default_probability_mean'):.3f}")
+    col2.metric(
+        "Score moyen", f"{_metric_value(prediction_summary, 'default_probability_mean'):.3f}"
+    )
     col3.metric("Score p95", f"{_metric_value(prediction_summary, 'default_probability_p95'):.3f}")
 
     if predictions.empty:
@@ -103,7 +107,7 @@ def _render_predictions_tab(predictions: pd.DataFrame) -> None:
     st.bar_chart(histogram)
 
     st.subheader("Dernières prédictions")
-    st.dataframe(predictions.sort_values("created_at", ascending=False).head(50), use_container_width=True)
+    st.dataframe(predictions.sort_values("created_at", ascending=False).head(50), width="stretch")
 
 
 def _render_drift_tab(
@@ -120,7 +124,9 @@ def _render_drift_tab(
         return
 
     reference_features = load_reference_features(reference_path, target_column, id_column)
-    shared_features = [column for column in reference_features.columns if column in production_features]
+    shared_features = [
+        column for column in reference_features.columns if column in production_features
+    ]
     if not shared_features:
         st.warning("Aucune variable commune entre la référence et les inputs de production.")
         return
@@ -151,7 +157,7 @@ def _render_drift_tab(
     top_drift = drift.sort_values("psi", ascending=False).head(20)
     st.subheader("Top variables dérivées")
     st.bar_chart(top_drift.set_index("feature")["psi"])
-    st.dataframe(top_drift, use_container_width=True)
+    st.dataframe(top_drift, width="stretch")
 
 
 def main() -> None:
@@ -207,9 +213,9 @@ def main() -> None:
 
     with tab_raw:
         st.subheader("Appels API")
-        st.dataframe(api_calls.tail(200), use_container_width=True)
+        st.dataframe(api_calls.tail(200), width="stretch")
         st.subheader("Prédictions")
-        st.dataframe(predictions.tail(200), use_container_width=True)
+        st.dataframe(predictions.tail(200), width="stretch")
 
 
 if __name__ == "__main__":
