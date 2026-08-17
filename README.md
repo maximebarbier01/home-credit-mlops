@@ -70,6 +70,7 @@ home-credit-mlops/
 |   |-- fairness/                    # Metriques et rapports de fairness
 |   |-- features/                    # Preprocessing sklearn
 |   |-- modeling/                    # Modèles, métriques, SHAP et serving
+|   |-- monitoring/                  # Logs production, drift et rapports
 |   `-- reporting/                   # Consolidation des rapports Excel
 |-- tests/                           # Tests automatisés
 |-- Dockerfile                       # Image de l'API de scoring
@@ -439,7 +440,9 @@ Vérification de santé : `curl http://127.0.0.1:8000/health`.
 Par défaut, les prédictions sont journalisées dans
 `artifacts/production_predictions.db`. La variable d'environnement
 `PREDICTION_LOGGING_ENABLED=false` désactive cette persistance et
+`API_CALL_LOGGING_ENABLED=false` désactive les logs techniques d'appels HTTP.
 `PREDICTION_DB_URL` permet de choisir une autre base compatible SQLAlchemy.
+`LOG_FORMAT=json` active des logs console structurés en JSON.
 La base peut aussi être initialisée explicitement avec :
 
 ```bash
@@ -512,6 +515,38 @@ artefact versionné et récupérable après chaque pipeline réussi — c'est
 la partie "build → test → **publie**" du CD ; faire tourner ce conteneur
 en continu quelque part resterait la suite logique si un hébergement était
 disponible.
+
+## Monitoring production et data drift
+
+L'API journalise les données nécessaires au suivi de production dans une base
+SQLite locale par défaut (`artifacts/production_predictions.db`) :
+
+- `prediction_logs` : inputs modèle, outputs métier, probabilité de défaut,
+  décision, latence et timestamp pour les prédictions réussies ;
+- `api_call_logs` : méthode HTTP, endpoint, statut, latence, payload JSON,
+  type d'erreur, client et user-agent pour tous les appels, y compris les
+  erreurs `422` ou `500`.
+
+Le rapport automatique se lance avec :
+
+```bash
+poetry run python scripts/analyze_production_monitoring.py
+```
+
+Sorties générées dans `reports/YYYYMMDD_home_credit_monitoring/...` :
+
+- `monitoring_summary.xlsx` : métriques opérationnelles, taux d'erreur,
+  latences, distribution des décisions, synthèse du drift ;
+- `monitoring_report.html` : rapport visuel consultable localement ;
+- PNG : distribution des scores, décisions, latences, variables les plus
+  dérivées.
+
+La référence de drift est le dataset d'entraînement préparé
+`data/processed/train_features.parquet`. Le script compare les inputs de
+production aux features de référence avec des indicateurs simples et
+explicables : PSI, KS test, variation de taux de valeurs manquantes. Si le
+volume de production est trop faible, le niveau de drift est marqué
+`insufficient_data` plutôt que sur-interprété.
 
 ## Qualité et limites
 

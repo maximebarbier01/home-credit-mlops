@@ -15,6 +15,7 @@ class ApiConfig:
     api_key: str | None
     prediction_db_url: str
     prediction_logging_enabled: bool
+    api_call_logging_enabled: bool
 
 
 def _env_flag(name: str, *, default: bool) -> bool:
@@ -38,5 +39,8 @@ def load_api_config() -> ApiConfig:
             "PREDICTION_LOGGING_ENABLED",
             default=True,
         ),
+        api_call_logging_enabled=_env_flag(
+            "API_CALL_LOGGING_ENABLED",
+            default=True,
+        ),
     )
-

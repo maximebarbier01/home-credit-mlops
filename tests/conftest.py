@@ -76,6 +76,7 @@ def api_app(stub_model: StubScoringModel):
         resolve_model=lambda serving: Path("unused"),
         load_model=lambda local_dir: stub_model,
         prediction_repository=None,
+        api_call_repository=None,
         init_prediction_storage=None,
     )
 
@@ -103,6 +104,7 @@ def api_app_factory():
             resolve_model=lambda serving: Path("unused"),
             load_model=lambda local_dir: stub_model,
             prediction_repository=None,
+            api_call_repository=None,
             init_prediction_storage=None,
         )
         client = TestClient(app)

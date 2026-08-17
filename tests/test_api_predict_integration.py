@@ -49,6 +49,7 @@ def test_predict_end_to_end_with_real_mlflow_model(tmp_path) -> None:
         resolve_model=lambda serving: model_dir,
         load_model=lambda local_dir: mlflow.pyfunc.load_model(local_dir.as_posix()),
         prediction_repository=None,
+        api_call_repository=None,
         init_prediction_storage=None,
     )
 

@@ -1,9 +1,13 @@
-"""Operations de lecture/ecriture autour des predictions journalisees."""
+"""Operations de lecture/ecriture autour des logs de production."""
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.db.database import SessionLocal
-from app.db.models import PredictionLog
+from app.db.models import ApiCallLog, PredictionLog
+
+MAX_ERROR_MESSAGE_LENGTH = 500
 
 
 def save_prediction_log(
@@ -26,3 +30,37 @@ def save_prediction_log(
         session.refresh(log)
         return int(log.id)
 
+
+def save_api_call_log(
+    *,
+    method: str,
+    path: str,
+    status_code: int,
+    latency_ms: float,
+    request_payload: dict[str, Any] | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    client_host: str | None = None,
+    user_agent: str | None = None,
+) -> int:
+    """Enregistre un appel HTTP pour le monitoring opérationnel."""
+
+    if error_message is not None:
+        error_message = error_message[:MAX_ERROR_MESSAGE_LENGTH]
+
+    with SessionLocal() as session:
+        log = ApiCallLog(
+            method=method,
+            path=path,
+            status_code=int(status_code),
+            latency_ms=float(latency_ms),
+            request_payload=request_payload,
+            error_type=error_type,
+            error_message=error_message,
+            client_host=client_host,
+            user_agent=user_agent,
+        )
+        session.add(log)
+        session.commit()
+        session.refresh(log)
+        return int(log.id)

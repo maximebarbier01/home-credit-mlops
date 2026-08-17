@@ -1007,7 +1007,104 @@ vrai modèle à 548 champs (hors suite pytest, contrôle ponctuel) : chaque
 règle rejette bien la valeur invalide correspondante, et un payload valide
 complet passe toujours de bout en bout.
 
-## 16. Nomenclature fichier par fichier
+## 16. Phase 11 : monitoring production et data drift
+
+Objectif : stocker les données produites par l'API, puis les analyser pour
+détecter des dérives de données et des problèmes opérationnels.
+
+### 16.1 Stockage des logs de production
+
+La base de production simulée est une base SQLite locale par défaut :
+`artifacts/production_predictions.db`. Le chemin peut être remplacé par une
+autre URL SQLAlchemy via `PREDICTION_DB_URL` (par exemple PostgreSQL dans une
+vraie production).
+
+Deux tables sont créées par SQLAlchemy :
+
+- `prediction_logs` : une ligne par prédiction réussie, avec `request_payload`
+  (inputs), `response_payload` (outputs), `default_probability`,
+  `credit_decision`, `latency_ms`, `created_at` ;
+- `api_call_logs` : une ligne par appel HTTP, y compris les erreurs, avec
+  `method`, `path`, `status_code`, `latency_ms`, `request_payload`,
+  `error_type`, `error_message`, `client_host`, `user_agent`, `created_at`.
+
+Cette séparation évite de mélanger la logique métier et l'observabilité :
+`prediction_logs` alimente le monitoring ML, `api_call_logs` alimente le
+monitoring opérationnel.
+
+Variables utiles :
+
+- `PREDICTION_LOGGING_ENABLED=false` désactive la persistance des prédictions ;
+- `API_CALL_LOGGING_ENABLED=false` désactive la persistance des appels HTTP ;
+- `LOG_FORMAT=json` active des logs console structurés en JSON ;
+- `HOME_CREDIT_API_KEY` protège `/predict` par header `X-API-Key`.
+
+### 16.2 Analyse automatique
+
+Commande principale :
+
+```bash
+poetry run python scripts/analyze_production_monitoring.py
+```
+
+Entrées par défaut :
+
+- base de logs : `PREDICTION_DB_URL` ou
+  `artifacts/production_predictions.db` ;
+- référence drift : `data/processed/train_features.parquet`.
+
+Sorties :
+
+- `reports/YYYYMMDD_home_credit_monitoring/YYYYMMDD_HHMMSS_monitoring/monitoring_summary.xlsx` ;
+- `monitoring_report.html` ;
+- `score_distribution.png`, `decision_distribution.png`,
+  `latency_distribution.png`, `top_drift_features.png`.
+
+Le classeur Excel contient les onglets `api_summary`, `prediction_summary`,
+`operational_alerts`, `status_code_summary`, `latency_by_path`,
+`drift_summary`, `numeric_drift`, `categorical_drift`, ainsi que des extraits
+des logs.
+
+### 16.3 Métriques calculées
+
+Monitoring opérationnel :
+
+- volume total d'appels et nombre d'appels `/predict` ;
+- taux d'erreur HTTP (`status_code >= 400`) ;
+- latence moyenne, p50, p95, p99, maximum ;
+- distribution des codes HTTP ;
+- alertes si taux d'erreur ou p95 de latence dépassent les seuils configurés.
+
+Monitoring modèle :
+
+- distribution des probabilités de défaut ;
+- taux de décisions `approved` / `refused` ;
+- comparaison des inputs de production à la référence d'entraînement.
+
+Data drift :
+
+- PSI (Population Stability Index) pour mesurer le déplacement de distribution ;
+- KS test pour les variables numériques ;
+- variation du taux de valeurs manquantes ;
+- niveau `low`, `moderate`, `high` ou `insufficient_data`.
+
+Le statut `insufficient_data` est volontaire : avec trop peu de logs de
+production, le rapport signale que la dérive ne doit pas être interprétée
+comme robuste.
+
+### 16.4 Points RGPD et stockage
+
+Le PoC stocke les payloads complets pour permettre l'analyse de drift, ce qui
+répond au besoin pédagogique. En production réelle, une revue RGPD serait
+nécessaire : minimisation des données, durée de rétention, chiffrement,
+pseudonymisation des identifiants client, contrôle d'accès à la base et aux
+exports.
+
+SQLite est suffisant pour un PoC local. Pour une production réelle ou un
+déploiement cloud, la même interface SQLAlchemy permettrait de basculer vers
+PostgreSQL sans changer la logique de monitoring.
+
+## 17. Nomenclature fichier par fichier
 
 ### Points d'entrée
 
@@ -1019,6 +1116,7 @@ complet passe toujours de bout en bout.
 | [`scripts/analyze_fairness.py`](../scripts/analyze_fairness.py) | Analyse la fairness (genre, tranche d'âge) du champion d'une campagne |
 | [`scripts/export_model_for_serving.py`](../scripts/export_model_for_serving.py) | Publie un modèle enregistré vers un dépôt Hugging Face Hub |
 | [`scripts/init_production_db.py`](../scripts/init_production_db.py) | Initialise la base SQLite de logs de prédiction API |
+| [`scripts/analyze_production_monitoring.py`](../scripts/analyze_production_monitoring.py) | Génère le rapport de monitoring production et data drift |
 | [`scripts/mlflow_ui.py`](../scripts/mlflow_ui.py) | Lance l'interface MLflow locale |
 
 ### Socle applicatif
@@ -1052,6 +1150,10 @@ complet passe toujours de bout en bout.
 | [`src/home_credit_mlops/fairness/metrics.py`](../src/home_credit_mlops/fairness/metrics.py) | Calcule les métriques de fairness par groupe sensible |
 | [`src/home_credit_mlops/fairness/report.py`](../src/home_credit_mlops/fairness/report.py) | Exporte les rapports de fairness (CSV, PNG, xlsx) |
 | [`src/home_credit_mlops/reporting/excel.py`](../src/home_credit_mlops/reporting/excel.py) | Regroupe les artefacts en classeurs Excel |
+| [`src/home_credit_mlops/monitoring/production.py`](../src/home_credit_mlops/monitoring/production.py) | Charge et aplatit les logs SQLite de production |
+| [`src/home_credit_mlops/monitoring/operational.py`](../src/home_credit_mlops/monitoring/operational.py) | Calcule volumes, taux d'erreur, latences et alertes |
+| [`src/home_credit_mlops/monitoring/drift.py`](../src/home_credit_mlops/monitoring/drift.py) | Calcule PSI, KS test et niveaux de data drift |
+| [`src/home_credit_mlops/monitoring/report.py`](../src/home_credit_mlops/monitoring/report.py) | Exporte Excel, HTML et graphiques de monitoring |
 
 ### API de scoring
 
@@ -1063,8 +1165,8 @@ complet passe toujours de bout en bout.
 | [`app/services/model_service.py`](../app/services/model_service.py) | Télécharge (Hugging Face Hub), charge le modèle et exécute l'inférence |
 | [`app/services/prediction_service.py`](../app/services/prediction_service.py) | Orchestration : scoring, latence, journalisation non bloquante |
 | [`app/db/database.py`](../app/db/database.py) | Connexion SQLAlchemy et création des tables |
-| [`app/db/models.py`](../app/db/models.py) | Modèle SQLAlchemy `PredictionLog` |
-| [`app/db/repository.py`](../app/db/repository.py) | Ecriture des logs de prédiction |
+| [`app/db/models.py`](../app/db/models.py) | Modèles SQLAlchemy `PredictionLog` et `ApiCallLog` |
+| [`app/db/repository.py`](../app/db/repository.py) | Ecriture des logs de prédiction et d'appels HTTP |
 | [`app/core/config.py`](../app/core/config.py) | Configuration API via variables d'environnement |
 | [`app/core/security.py`](../app/core/security.py) | Protection optionnelle par `X-API-Key` |
 | [`Dockerfile`](../Dockerfile) | Image Docker de l'API (multi-stage, `python:3.12-slim`) |
@@ -1085,7 +1187,7 @@ Ces deux commandes sont exécutées automatiquement en CI
 ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) sur chaque push
 et pull request vers `main`.
 
-## 17. Scénarios d'utilisation
+## 18. Scénarios d'utilisation
 
 ### Modification de la préparation des données
 
@@ -1129,7 +1231,7 @@ Le recours à `--n-jobs 1` est recommandé pour les campagnes lourdes sous WSL.
 Les processus parallèles dupliquent les matrices transformées et les jeux
 sur-échantillonnés, ce qui peut saturer la mémoire malgré un nombre élevé de CPU.
 
-## 18. Trame de présentation du pipeline
+## 19. Trame de présentation du pipeline
 
 Une présentation synthétique peut suivre cette narration :
 
@@ -1144,7 +1246,7 @@ Une présentation synthétique peut suivre cette narration :
 > les paramètres, métriques, artefacts et versions, puis expose une réponse
 > contenant la probabilité de défaut, le seuil versionné et la décision de crédit.
 
-## 19. Points de vigilance
+## 20. Points de vigilance
 
 - Le rapport `FN/FP = 10` reste une hypothèse pédagogique à faire valider par le métier.
 - Le holdout doit rester absent de la sélection des modèles et des seuils.
