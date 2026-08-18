@@ -1,4 +1,4 @@
-"""Chargement du modele MLflow et inference unitaire."""
+"""Chargement du modèle MLflow et inférence unitaire."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ ModelLoader = Callable[[Path], mlflow.pyfunc.PyFuncModel]
 
 
 def resolve_model_source(serving: ServingConfig) -> Path:
-    """Telecharge le dossier MLflow du modele depuis Hugging Face Hub."""
+    """Télécharge le dossier MLflow du modèle depuis Hugging Face Hub."""
 
     LOGGER.info(
         "Downloading scoring model from Hugging Face Hub: %s (revision=%s)",
@@ -48,7 +48,7 @@ def resolve_model_source(serving: ServingConfig) -> Path:
 
 
 def load_scoring_model(local_dir: Path) -> mlflow.pyfunc.PyFuncModel:
-    """Charge le modele MLflow depuis un dossier local sans toucher au tracking projet."""
+    """Charge le modèle MLflow depuis un dossier local sans toucher au tracking projet."""
 
     LOGGER.info("Loading scoring model from %s", local_dir)
     mlflow.set_tracking_uri(f"sqlite:///{tempfile.mkdtemp()}/mlflow.db")
@@ -56,7 +56,7 @@ def load_scoring_model(local_dir: Path) -> mlflow.pyfunc.PyFuncModel:
 
 
 class ModelService:
-    """Service responsable du modele : chargement, schema et prediction."""
+    """Service responsable du modèle : chargement, schéma et prédiction."""
 
     def __init__(
         self,
@@ -75,7 +75,7 @@ class ModelService:
         return self.model is not None
 
     def load(self, serving: ServingConfig) -> None:
-        """Charge le modele une seule fois et prepare son schema de requete."""
+        """Charge le modèle une seule fois et prépare son schéma de rêquete."""
 
         local_dir = self._resolve_model(serving)
         self.model = self._load_model(local_dir)
@@ -86,7 +86,7 @@ class ModelService:
         )
 
     def predict(self, payload: dict[str, Any]) -> PredictionResponse:
-        """Execute une prediction et retourne une reponse metier typee."""
+        """Execute une prédiction et retourne une réponse métier typée."""
 
         if self.model is None or self.input_schema is None:
             raise ModelNotLoadedError("Scoring model is not loaded.")
@@ -95,4 +95,3 @@ class ModelService:
         input_frame = coerce_frame_dtypes(input_frame, self.input_schema)
         result = self.model.predict(input_frame)
         return PredictionResponse(**result.iloc[0].to_dict())
-

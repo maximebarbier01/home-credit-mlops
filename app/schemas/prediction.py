@@ -1,8 +1,8 @@
 """Schemas Pydantic de prediction et validation d'entree.
 
-La signature du modele MLflow reste la source de verite : le modele de
-requete FastAPI est construit dynamiquement au demarrage a partir des
-colonnes reellement attendues par le champion servi.
+La signature du modèle MLflow reste la source de vérité : le modèle de
+requête FastAPI est construit dynamiquement au demarrage à partir des
+colonnes réellement attendues par le champion servi.
 """
 
 from __future__ import annotations
@@ -264,4 +264,3 @@ def coerce_frame_dtypes(frame: pd.DataFrame, input_schema: mlflow.types.Schema) 
             continue
         coerced[col_spec.name] = coerced[col_spec.name].astype(col_spec.type.to_numpy())
     return coerced
-

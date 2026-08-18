@@ -1,4 +1,4 @@
-"""Point d'entree FastAPI de l'API Home Credit."""
+"""Point d'entrée FastAPI de l'API Home Credit."""
 
 from __future__ import annotations
 

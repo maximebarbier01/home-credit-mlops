@@ -1,4 +1,4 @@
-"""Connexion SQLAlchemy utilisee pour journaliser les predictions."""
+"""Connexion SQLAlchemy utilisée pour journaliser les prédictions."""
 
 from __future__ import annotations
 
@@ -55,4 +55,3 @@ def get_engine() -> Engine:
     if _engine is None:
         raise RuntimeError("Database has not been configured.")
     return _engine
-

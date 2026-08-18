@@ -1,4 +1,4 @@
-"""Orchestration metier d'une demande de scoring."""
+"""Orchestration métier d'une demande de scoring."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ PredictionRepository = Callable[[dict[str, Any], dict[str, Any], float], int | N
 
 
 class PredictionService:
-    """Coordonne inference, chronometrage et journalisation optionnelle."""
+    """Coordonne inférence, chronomètrage et journalisation optionnelle."""
 
     def __init__(
         self,
@@ -42,7 +42,8 @@ class PredictionService:
                     latency_ms,
                 )
             except Exception:
-                LOGGER.exception("Prediction logging failed; returning scoring response anyway.")
+                LOGGER.exception(
+                    "La prédiction a échoué; la réponse de notation est tout de même renvoyée."
+                )
 
         return response
-

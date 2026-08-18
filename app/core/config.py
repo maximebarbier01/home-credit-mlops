@@ -1,4 +1,4 @@
-"""Configuration specifique a l'API de serving."""
+"""Configuration spécifique a l'API de serving."""
 
 from __future__ import annotations
 
