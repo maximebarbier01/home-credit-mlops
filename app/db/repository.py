@@ -1,4 +1,4 @@
-"""Operations de lecture/ecriture autour des logs de production."""
+"""Opérations de lecture/écriture autour des logs de production."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.db.database import SessionLocal
-from app.db.models import ApiCallLog, PredictionLog
+from app.db.models import ApiCallLog, PredictionLog, ProductionInput, ProductionOutput
 
 MAX_ERROR_MESSAGE_LENGTH = 500
 
@@ -19,9 +19,9 @@ def save_prediction_log(
     response_payload: dict,
     latency_ms: float,
 ) -> int:
-    """Enregistre une prediction et retourne son identifiant technique."""
+    """Enregistre une prédiction et retourne son identifiant technique."""
 
-    with SessionLocal() as session:
+    with SessionLocal.begin() as session:
         log = PredictionLog(
             request_payload=request_payload,
             response_payload=response_payload,
@@ -30,8 +30,23 @@ def save_prediction_log(
             latency_ms=float(latency_ms),
         )
         session.add(log)
-        session.commit()
-        session.refresh(log)
+        session.flush()
+
+        production_input = ProductionInput(
+            prediction_log_id=int(log.id),
+            input_payload=request_payload,
+            feature_count=len(request_payload),
+        )
+        production_output = ProductionOutput(
+            prediction_log_id=int(log.id),
+            output_payload=response_payload,
+            default_probability=float(response_payload["default_probability"]),
+            business_threshold=float(response_payload["business_threshold"]),
+            predicted_default=int(response_payload["predicted_default"]),
+            credit_decision=str(response_payload["credit_decision"]),
+            latency_ms=float(latency_ms),
+        )
+        session.add_all([production_input, production_output])
         return int(log.id)
 
 

@@ -48,6 +48,7 @@ fastapi = ">=0.138,<1.0"
 huggingface-hub = ">=1.20,<2.0"
 pydantic = ">=2.13,<3.0"
 sqlalchemy = ">=2.0,<3.0"
+psycopg = {version = ">=3.2,<4.0", extras = ["binary"]}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

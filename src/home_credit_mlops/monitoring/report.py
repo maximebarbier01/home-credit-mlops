@@ -29,6 +29,8 @@ from home_credit_mlops.monitoring.operational import (
 from home_credit_mlops.monitoring.production import (
     load_api_call_logs,
     load_prediction_logs,
+    load_production_inputs,
+    load_production_outputs,
     production_feature_frame,
     production_prediction_frame,
 )
@@ -79,7 +81,9 @@ def _save_score_distribution(predictions: pd.DataFrame, path: Path) -> Path | No
         return None
 
     fig, ax = plt.subplots(figsize=(9, 5))
-    predictions["default_probability"].astype(float).plot(kind="hist", bins=30, ax=ax, color="#2f6f9f")
+    predictions["default_probability"].astype(float).plot(
+        kind="hist", bins=30, ax=ax, color="#2f6f9f"
+    )
     ax.set_title("Distribution des probabilités de défaut")
     ax.set_xlabel("Probabilité de défaut")
     ax.set_ylabel("Nombre de clients")
@@ -157,7 +161,7 @@ def _write_html_report(
         "th{background:#f2f5f7;}img{max-width:100%;height:auto;margin:12px 0 28px;}"
         "h1,h2{color:#102a43;}</style></head><body>",
         "<h1>Rapport de monitoring - Home Credit Scoring API</h1>",
-        "<p>PoC local : stockage SQLite des appels API, analyse opérationnelle et data drift.</p>",
+        "<p>PoC local : stockage SQLAlchemy des appels API, analyse opérationnelle et data drift.</p>",
     ]
     for plot_name in relative_plots:
         html_sections.append(f"<img src='{plot_name}' alt='{plot_name}'>")
@@ -187,15 +191,21 @@ def build_monitoring_report(
 
     api_calls = load_api_call_logs(database_url)
     prediction_logs = load_prediction_logs(database_url)
-    production_features = production_feature_frame(prediction_logs)
-    predictions = production_prediction_frame(prediction_logs)
+    production_features = load_production_inputs(database_url)
+    predictions = load_production_outputs(database_url)
+    if production_features.empty:
+        production_features = production_feature_frame(prediction_logs)
+    if predictions.empty:
+        predictions = production_prediction_frame(prediction_logs)
 
     reference_features = _drop_non_feature_columns(
         read_table(reference_data_path),
         target_column=target_column,
         id_column=id_column,
     )
-    shared_features = [column for column in reference_features.columns if column in production_features]
+    shared_features = [
+        column for column in reference_features.columns if column in production_features
+    ]
     reference_aligned = reference_features[shared_features] if shared_features else pd.DataFrame()
     production_aligned = production_features[shared_features] if shared_features else pd.DataFrame()
 
@@ -239,6 +249,8 @@ def build_monitoring_report(
         "categorical_drift": categorical_drift,
         "api_calls_sample": api_calls.head(100),
         "predictions_sample": predictions.head(100),
+        "production_inputs_sample": production_features.head(100),
+        "production_outputs_sample": predictions.head(100),
     }
 
     workbook_path = output / "monitoring_summary.xlsx"

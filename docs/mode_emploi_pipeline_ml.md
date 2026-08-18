@@ -124,7 +124,8 @@ Les dépendances sont réparties en groupes Poetry : `main` (calcul/inférence
 toujours nécessaire — pandas, scikit-learn, mlflow, lightgbm, xgboost,
 imbalanced-learn), `reporting` (matplotlib, seaborn, shap, missingno,
 openpyxl — EDA et rapports, pas nécessaire à l'API), `api` (fastapi,
-huggingface_hub, pydantic) et `dev` (pytest, ruff, httpx2). `poetry install`
+huggingface_hub, pydantic, SQLAlchemy, psycopg) et `dev` (pytest, ruff,
+httpx2). `poetry install`
 sans option installe tous les groupes ; l'image Docker de l'API n'installe
 que `main` et `api` (`poetry install --only main,api`) pour rester légère
 (voir section 15.5).
@@ -860,13 +861,16 @@ faire fuiter des routes enregistrées dynamiquement d'un test à l'autre.
 uvicorn (`module:app`).
 
 Par défaut, les prédictions sont journalisées dans une base SQLite
-`artifacts/production_predictions.db`, via SQLAlchemy. Cette journalisation
-est volontairement non bloquante : si l'écriture échoue, la prédiction est
-quand même retournée. Deux variables d'environnement permettent d'adapter ce
+`artifacts/production_predictions.db`, via SQLAlchemy. Pour une démo
+production-like, la même couche SQLAlchemy peut écrire dans PostgreSQL via
+`PREDICTION_DB_URL=postgresql+psycopg://...`. Cette journalisation est
+volontairement non bloquante : si l'écriture échoue, la prédiction est quand
+même retournée. Deux variables d'environnement permettent d'adapter ce
 comportement :
 
 - `PREDICTION_LOGGING_ENABLED=false` pour désactiver la persistance ;
-- `PREDICTION_DB_URL=sqlite:////chemin/vers/prod.db` pour changer de base.
+- `PREDICTION_DB_URL=sqlite:////chemin/vers/prod.db` ou
+  `PREDICTION_DB_URL=postgresql+psycopg://...` pour changer de base.
 
 `HOME_CREDIT_API_KEY` active une protection simple par header `X-API-Key`.
 Si cette variable n'est pas définie, l'API reste ouverte pour les tests et
@@ -907,6 +911,21 @@ reconstruire l'image.
 docker build -t home-credit-scoring-api .
 docker run -p 8000:7860 -e HF_TOKEN=hf_... home-credit-scoring-api
 ```
+
+Le fichier [`docker-compose.yml`](../docker-compose.yml) lance une variante
+production-like avec deux services :
+
+- `postgres` : PostgreSQL 16, base `home_credit_monitoring`, volume persistant ;
+- `api` : image FastAPI connectée à PostgreSQL via `PREDICTION_DB_URL`.
+
+```bash
+docker compose up --build
+```
+
+L'API reste exposée sur <http://127.0.0.1:8000/docs>, tandis que PostgreSQL
+est exposé localement sur le port `55432` pour éviter les conflits avec une
+installation PostgreSQL déjà présente sur le port standard `5432`. Dans le
+réseau Docker interne, l'API continue bien d'utiliser `postgres:5432`.
 
 **Trois bugs réels trouvés en testant le conteneur réellement construit et
 lancé** (pas seulement écrit — voir 15.7) :
@@ -1016,21 +1035,28 @@ détecter des dérives de données et des problèmes opérationnels.
 
 La base de production simulée est une base SQLite locale par défaut :
 `artifacts/production_predictions.db`. Le chemin peut être remplacé par une
-autre URL SQLAlchemy via `PREDICTION_DB_URL` (par exemple PostgreSQL dans une
-vraie production).
+autre URL SQLAlchemy via `PREDICTION_DB_URL`. Pour se rapprocher d'une
+production réelle, le projet fournit un PostgreSQL local dans
+[`docker-compose.yml`](../docker-compose.yml).
 
-Deux tables sont créées par SQLAlchemy :
+Quatre tables sont créées par SQLAlchemy :
 
-- `prediction_logs` : une ligne par prédiction réussie, avec `request_payload`
-  (inputs), `response_payload` (outputs), `default_probability`,
-  `credit_decision`, `latency_ms`, `created_at` ;
 - `api_call_logs` : une ligne par appel HTTP, y compris les erreurs, avec
   `method`, `path`, `status_code`, `latency_ms`, `request_payload`,
   `error_type`, `error_message`, `client_host`, `user_agent`, `created_at`.
+- `prediction_logs` : une ligne par prédiction réussie, avec `request_payload`
+  (inputs), `response_payload` (outputs), `default_probability`,
+  `credit_decision`, `latency_ms`, `created_at` ;
+- `production_inputs` : une ligne par scoring réussi, contenant le snapshot
+  JSON des features réellement envoyées au modèle ;
+- `production_outputs` : une ligne par scoring réussi, contenant la réponse
+  métier persistée (`default_probability`, `business_threshold`,
+  `predicted_default`, `credit_decision`).
 
 Cette séparation évite de mélanger la logique métier et l'observabilité :
-`prediction_logs` alimente le monitoring ML, `api_call_logs` alimente le
-monitoring opérationnel.
+`api_call_logs` alimente le monitoring opérationnel, `production_inputs`
+alimente le data drift, et `production_outputs` alimente le suivi des scores
+et décisions.
 
 Variables utiles :
 
@@ -1038,6 +1064,22 @@ Variables utiles :
 - `API_CALL_LOGGING_ENABLED=false` désactive la persistance des appels HTTP ;
 - `LOG_FORMAT=json` active des logs console structurés en JSON ;
 - `HOME_CREDIT_API_KEY` protège `/predict` par header `X-API-Key`.
+
+Démo PostgreSQL :
+
+```bash
+docker compose up --build
+poetry run python scripts/simulate_production_requests.py \
+  --sample-size 100 \
+  --invalid-requests 3
+docker compose exec postgres psql \
+  -U home_credit \
+  -d home_credit_monitoring \
+  -c "SELECT 'api_call_logs' AS table_name, COUNT(*) FROM api_call_logs
+      UNION ALL SELECT 'prediction_logs', COUNT(*) FROM prediction_logs
+      UNION ALL SELECT 'production_inputs', COUNT(*) FROM production_inputs
+      UNION ALL SELECT 'production_outputs', COUNT(*) FROM production_outputs;"
+```
 
 ### 16.2 Analyse automatique
 
@@ -1105,8 +1147,9 @@ Dashboard local :
 poetry run streamlit run dashboard/monitoring_app.py
 ```
 
-Le dashboard Streamlit lit la même base SQLite et propose quatre onglets :
-opérations, scores, data drift et logs bruts.
+Le dashboard Streamlit lit la même base SQLAlchemy et propose quatre onglets :
+opérations, scores, data drift et logs bruts. Il peut donc pointer vers SQLite
+ou PostgreSQL selon la valeur de `PREDICTION_DB_URL`.
 
 ### 16.3 Métriques calculées
 
@@ -1143,9 +1186,10 @@ nécessaire : minimisation des données, durée de rétention, chiffrement,
 pseudonymisation des identifiants client, contrôle d'accès à la base et aux
 exports.
 
-SQLite est suffisant pour un PoC local. Pour une production réelle ou un
-déploiement cloud, la même interface SQLAlchemy permettrait de basculer vers
-PostgreSQL sans changer la logique de monitoring.
+SQLite est suffisant pour un PoC local. PostgreSQL est désormais disponible
+pour démontrer la persistance et la traçabilité multi-tables. Pour une
+production réelle, il resterait à ajouter une politique de rétention, des
+sauvegardes, une gestion fine des accès et une revue RGPD.
 
 ## 17. Nomenclature fichier par fichier
 
@@ -1158,7 +1202,7 @@ PostgreSQL sans changer la logique de monitoring.
 | [`scripts/register_champion_model.py`](../scripts/register_champion_model.py) | Réentraîne et enregistre rapidement le champion MLflow |
 | [`scripts/analyze_fairness.py`](../scripts/analyze_fairness.py) | Analyse la fairness (genre, tranche d'âge) du champion d'une campagne |
 | [`scripts/export_model_for_serving.py`](../scripts/export_model_for_serving.py) | Publie un modèle enregistré vers un dépôt Hugging Face Hub |
-| [`scripts/init_production_db.py`](../scripts/init_production_db.py) | Initialise la base SQLite de logs de prédiction API |
+| [`scripts/init_production_db.py`](../scripts/init_production_db.py) | Initialise la base SQLAlchemy de logs de production API |
 | [`scripts/analyze_production_monitoring.py`](../scripts/analyze_production_monitoring.py) | Génère le rapport de monitoring production et data drift |
 | [`scripts/simulate_production_requests.py`](../scripts/simulate_production_requests.py) | Envoie un échantillon de clients vers l'API pour simuler du trafic |
 | [`scripts/export_production_logs.py`](../scripts/export_production_logs.py) | Exporte les logs bruts de production dans un classeur Excel |
@@ -1196,7 +1240,7 @@ PostgreSQL sans changer la logique de monitoring.
 | [`src/home_credit_mlops/fairness/metrics.py`](../src/home_credit_mlops/fairness/metrics.py) | Calcule les métriques de fairness par groupe sensible |
 | [`src/home_credit_mlops/fairness/report.py`](../src/home_credit_mlops/fairness/report.py) | Exporte les rapports de fairness (CSV, PNG, xlsx) |
 | [`src/home_credit_mlops/reporting/excel.py`](../src/home_credit_mlops/reporting/excel.py) | Regroupe les artefacts en classeurs Excel |
-| [`src/home_credit_mlops/monitoring/production.py`](../src/home_credit_mlops/monitoring/production.py) | Charge et aplatit les logs SQLite de production |
+| [`src/home_credit_mlops/monitoring/production.py`](../src/home_credit_mlops/monitoring/production.py) | Charge et aplatit les logs SQLAlchemy de production |
 | [`src/home_credit_mlops/monitoring/operational.py`](../src/home_credit_mlops/monitoring/operational.py) | Calcule volumes, taux d'erreur, latences et alertes |
 | [`src/home_credit_mlops/monitoring/drift.py`](../src/home_credit_mlops/monitoring/drift.py) | Calcule PSI, KS test et niveaux de data drift |
 | [`src/home_credit_mlops/monitoring/report.py`](../src/home_credit_mlops/monitoring/report.py) | Exporte Excel, HTML et graphiques de monitoring |

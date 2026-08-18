@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: home-credit-postgres
+    environment:
+      POSTGRES_DB: home_credit_monitoring
+      POSTGRES_USER: maximebarbier
+      POSTGRES_PASSWORD: "@udrey29Le"
+    ports:
+      - "55432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maximebarbier -d home_credit_monitoring"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    container_name: home-credit-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      API_CALL_LOGGING_ENABLED: "true"
+      PREDICTION_LOGGING_ENABLED: "true"
+      PREDICTION_DB_URL: postgresql+psycopg://maximebarbier:%40udrey29Le@postgres:5432/home_credit_monitoring
+    ports:
+      - "8000:7860"
+    volumes:
+      - hf_model_cache:/app/artifacts/hf_model_cache
+
+volumes:
+  postgres_data:
+  hf_model_cache:

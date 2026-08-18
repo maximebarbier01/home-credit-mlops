@@ -91,6 +91,7 @@ Une nomenclature détaillée, fichier par fichier, est disponible dans
 - Poetry ;
 - fichiers Home Credit placés dans `data/raw/` ;
 - Docker (pour construire/tester l'image de l'API) ;
+- Docker Compose (pour la démo PostgreSQL + API multi-conteneurs) ;
 - un compte Hugging Face (pour publier/télécharger le modèle de l'API, voir
   section "API de scoring").
 
@@ -397,7 +398,7 @@ seule fois au démarrage (jamais par requête).
   sans fuite d'informations internes sur une erreur inattendue) ;
 - validation métier explicite sur les champs sensibles (âge, revenu, montant
   du crédit, taille du foyer) — pas seulement un contrôle de type ;
-- journalisation optionnelle des prédictions dans une base SQLite/SQLAlchemy
+- journalisation optionnelle des prédictions dans une base SQLAlchemy
   pour alimenter le monitoring ;
 - image Docker autonome et déployable, sans dépendre de l'infrastructure
   MLflow locale (`mlflow.db`/`mlartifacts/`) au runtime.
@@ -450,6 +451,14 @@ La base peut aussi être initialisée explicitement avec :
 poetry run python scripts/init_production_db.py
 ```
 
+Pour utiliser PostgreSQL en local hors Docker Compose :
+
+```bash
+export PREDICTION_DB_URL="postgresql+psycopg://home_credit:home_credit@127.0.0.1:55432/home_credit_monitoring"
+poetry run python scripts/init_production_db.py
+poetry run uvicorn app.main:app --reload --port 8000
+```
+
 Au premier démarrage, le modèle est téléchargé depuis un dépôt Hugging Face
 Hub (`[serving]` dans `configs/default.toml`) — publié au préalable via :
 
@@ -466,6 +475,19 @@ poetry run python scripts/export_model_for_serving.py \
 docker build -t home-credit-scoring-api .
 docker run -p 8000:7860 -e HF_TOKEN=hf_... home-credit-scoring-api
 ```
+
+Une variante production-like avec PostgreSQL est fournie via Docker Compose :
+
+```bash
+docker compose up --build
+```
+
+Elle lance deux services :
+
+- `postgres` : base PostgreSQL persistée dans un volume Docker ;
+- `api` : API FastAPI connectée à PostgreSQL via `PREDICTION_DB_URL`.
+
+L'API reste disponible sur <http://127.0.0.1:8000/docs>.
 
 Un exemple de requête `curl`, avec un payload réel déjà prêt dans le dépôt
 (548 champs, [`tests/fixtures/sample_predict_payload.json`](tests/fixtures/sample_predict_payload.json)) :
@@ -520,13 +542,20 @@ disponible.
 ## Monitoring production et data drift
 
 L'API journalise les données nécessaires au suivi de production dans une base
-SQLite locale par défaut (`artifacts/production_predictions.db`) :
+SQLAlchemy. SQLite reste le mode local par défaut
+(`artifacts/production_predictions.db`), tandis que PostgreSQL est disponible
+pour une démo production-like via `docker-compose.yml`.
 
-- `prediction_logs` : inputs modèle, outputs métier, probabilité de défaut,
-  décision, latence et timestamp pour les prédictions réussies ;
 - `api_call_logs` : méthode HTTP, endpoint, statut, latence, payload JSON,
   type d'erreur, client et user-agent pour tous les appels, y compris les
-  erreurs `422` ou `500`.
+  erreurs `422` ou `500` ;
+- `prediction_logs` : trace complète des prédictions réussies, avec payload
+  d'entrée, payload de sortie, probabilité de défaut, décision, latence et
+  timestamp ;
+- `production_inputs` : snapshot des features envoyées au modèle, une ligne par
+  scoring réussi ;
+- `production_outputs` : réponse métier persistée, avec probabilité, seuil,
+  classe prédite et décision crédit.
 
 Le rapport automatique se lance avec :
 
@@ -583,6 +612,41 @@ poetry run python scripts/export_production_logs.py
 poetry run streamlit run dashboard/monitoring_app.py
 ```
 
+### Démo PostgreSQL avec les quatre tables de traçabilité
+
+1. Lancer PostgreSQL et l'API :
+
+```bash
+docker compose up --build
+```
+
+2. Simuler du trafic :
+
+```bash
+poetry run python scripts/simulate_production_requests.py \
+  --sample-size 100 \
+  --invalid-requests 3
+```
+
+3. Vérifier les quatre tables dans PostgreSQL :
+
+```bash
+docker compose exec postgres psql \
+  -U home_credit \
+  -d home_credit_monitoring \
+  -c "SELECT 'api_call_logs' AS table_name, COUNT(*) FROM api_call_logs
+      UNION ALL SELECT 'prediction_logs', COUNT(*) FROM prediction_logs
+      UNION ALL SELECT 'production_inputs', COUNT(*) FROM production_inputs
+      UNION ALL SELECT 'production_outputs', COUNT(*) FROM production_outputs;"
+```
+
+4. Exporter les quatre tables dans un classeur Excel :
+
+```bash
+export PREDICTION_DB_URL="postgresql+psycopg://home_credit:home_credit@127.0.0.1:55432/home_credit_monitoring"
+poetry run python scripts/export_production_logs.py
+```
+
 ## Qualité et limites
 
 Contrôles disponibles (exécutés automatiquement en CI, voir
@@ -598,8 +662,9 @@ Limites à conserver dans l'analyse :
 
 - le rapport de coût `FN/FP = 10` constitue une hypothèse pédagogique à valider avec le métier ;
 - le tracking et le registry reposent actuellement sur une infrastructure locale ;
-- le monitoring est un PoC local basé sur SQLite ; en production réelle,
-  PostgreSQL, une politique de rétention et une revue RGPD seraient nécessaires ;
+- le monitoring PostgreSQL reste un PoC local ; en production réelle, une
+  politique de rétention, des droits d'accès, des sauvegardes et une revue RGPD
+  seraient nécessaires ;
 - les artefacts locaux et les données brutes ne sont pas stockés dans Git ;
 - l'analyse de fairness (`scripts/analyze_fairness.py`) remonte des écarts significatifs par
   genre et par tranche d'âge sur le champion actuel, non encore traités.

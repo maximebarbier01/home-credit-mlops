@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.db.database import SessionLocal, init_db
-from app.db.models import ApiCallLog, PredictionLog
+from app.db.models import ApiCallLog, PredictionLog, ProductionInput, ProductionOutput
 from app.db.repository import save_api_call_log, save_prediction_log
 
 
@@ -24,12 +24,23 @@ def test_save_prediction_log_persists_request_response_and_latency(tmp_path) -> 
 
     with SessionLocal() as session:
         log = session.scalars(select(PredictionLog).where(PredictionLog.id == log_id)).one()
+        production_input = session.scalars(
+            select(ProductionInput).where(ProductionInput.prediction_log_id == log_id)
+        ).one()
+        production_output = session.scalars(
+            select(ProductionOutput).where(ProductionOutput.prediction_log_id == log_id)
+        ).one()
 
     assert log.request_payload == {"AGE_YEARS": 35.0}
     assert log.response_payload["predicted_default"] == 1
     assert log.default_probability == 0.42
     assert log.credit_decision == "refused"
     assert log.latency_ms == 12.5
+    assert production_input.input_payload == {"AGE_YEARS": 35.0}
+    assert production_input.feature_count == 1
+    assert production_output.output_payload["predicted_default"] == 1
+    assert production_output.business_threshold == 0.22
+    assert production_output.latency_ms == 12.5
 
 
 def test_save_api_call_log_persists_http_status_payload_and_error(tmp_path) -> None:

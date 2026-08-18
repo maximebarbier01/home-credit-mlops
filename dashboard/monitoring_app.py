@@ -23,6 +23,8 @@ from home_credit_mlops.monitoring.operational import (
 from home_credit_mlops.monitoring.production import (
     load_api_call_logs,
     load_prediction_logs,
+    load_production_inputs,
+    load_production_outputs,
     production_feature_frame,
     production_prediction_frame,
 )
@@ -30,8 +32,17 @@ from home_credit_mlops.settings import load_settings
 
 
 @st.cache_data(show_spinner=False)
-def load_monitoring_tables(database_url: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    return load_api_call_logs(database_url), load_prediction_logs(database_url)
+def load_monitoring_tables(
+    database_url: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    prediction_logs = load_prediction_logs(database_url)
+    production_inputs = load_production_inputs(database_url)
+    production_outputs = load_production_outputs(database_url)
+    if production_inputs.empty:
+        production_inputs = production_feature_frame(prediction_logs)
+    if production_outputs.empty:
+        production_outputs = production_prediction_frame(prediction_logs)
+    return load_api_call_logs(database_url), prediction_logs, production_inputs, production_outputs
 
 
 @st.cache_data(show_spinner=False)
@@ -112,13 +123,12 @@ def _render_predictions_tab(predictions: pd.DataFrame) -> None:
 
 def _render_drift_tab(
     *,
-    prediction_logs: pd.DataFrame,
+    production_features: pd.DataFrame,
     reference_path: str,
     target_column: str,
     id_column: str,
     min_current_rows: int,
 ) -> None:
-    production_features = production_feature_frame(prediction_logs)
     if production_features.empty:
         st.info("Aucun input de production disponible pour calculer le drift.")
         return
@@ -170,7 +180,7 @@ def main() -> None:
         layout="wide",
     )
     st.title("Monitoring de l'API Home Credit")
-    st.caption("PoC local : logs SQLite, métriques opérationnelles, scores et data drift.")
+    st.caption("PoC local : logs SQLAlchemy, métriques opérationnelles, scores et data drift.")
 
     with st.sidebar:
         st.header("Configuration")
@@ -189,8 +199,9 @@ def main() -> None:
         if st.button("Rafraîchir les données"):
             st.cache_data.clear()
 
-    api_calls, prediction_logs = load_monitoring_tables(database_url)
-    predictions = production_prediction_frame(prediction_logs)
+    api_calls, prediction_logs, production_inputs, predictions = load_monitoring_tables(
+        database_url
+    )
 
     tab_ops, tab_predictions, tab_drift, tab_raw = st.tabs(
         ["Opérations", "Scores", "Data drift", "Logs bruts"]
@@ -204,7 +215,7 @@ def main() -> None:
 
     with tab_drift:
         _render_drift_tab(
-            prediction_logs=prediction_logs,
+            production_features=production_inputs,
             reference_path=reference_path,
             target_column=settings.dataset.target_column,
             id_column=settings.dataset.id_column,
@@ -214,7 +225,11 @@ def main() -> None:
     with tab_raw:
         st.subheader("Appels API")
         st.dataframe(api_calls.tail(200), width="stretch")
-        st.subheader("Prédictions")
+        st.subheader("Prédictions brutes")
+        st.dataframe(prediction_logs.tail(200), width="stretch")
+        st.subheader("Inputs modèle")
+        st.dataframe(production_inputs.tail(200), width="stretch")
+        st.subheader("Outputs modèle")
         st.dataframe(predictions.tail(200), width="stretch")
 
 

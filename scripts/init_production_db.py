@@ -1,4 +1,4 @@
-"""Initialise la base SQLite utilisee pour les logs de predictions API."""
+"""Initialise la base SQLAlchemy utilisee pour les logs de production API."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from home_credit_mlops.logging_utils import configure_logging
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Initialize the API prediction log database.")
+    parser = argparse.ArgumentParser(description="Initialize the API production log database.")
     parser.add_argument(
         "--database-url",
         default=None,
@@ -31,4 +31,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

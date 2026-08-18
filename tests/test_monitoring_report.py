@@ -10,6 +10,8 @@ from app.db.repository import save_api_call_log, save_prediction_log
 from home_credit_mlops.monitoring.production import (
     load_api_call_logs,
     load_prediction_logs,
+    load_production_inputs,
+    load_production_outputs,
     production_feature_frame,
 )
 from home_credit_mlops.monitoring.report import build_monitoring_report
@@ -55,10 +57,14 @@ def test_load_logs_and_flatten_production_features(tmp_path: Path) -> None:
     api_calls = load_api_call_logs(database_url)
     prediction_logs = load_prediction_logs(database_url)
     production_features = production_feature_frame(prediction_logs)
+    production_inputs = load_production_inputs(database_url)
+    production_outputs = load_production_outputs(database_url)
 
     assert len(api_calls) == 2
     assert len(prediction_logs) == 1
     assert production_features.loc[0, "AGE_YEARS"] == 35.0
+    assert production_inputs.loc[0, "AGE_YEARS"] == 35.0
+    assert production_outputs.loc[0, "predicted_default"] == 1
 
 
 def test_build_monitoring_report_exports_workbook_html_and_plots(tmp_path: Path) -> None:
@@ -97,6 +103,5 @@ def test_build_monitoring_report_exports_workbook_html_and_plots(tmp_path: Path)
     }
 
     workbook = load_workbook(report.workbook_path)
-    assert {"api_summary", "prediction_summary", "drift_summary"}.issubset(
-        workbook.sheetnames
-    )
+    assert {"api_summary", "prediction_summary", "drift_summary"}.issubset(workbook.sheetnames)
+    assert {"production_inputs_sample", "production_outputs_sample"}.issubset(workbook.sheetnames)

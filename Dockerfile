@@ -40,9 +40,11 @@ COPY --from=builder /app/app ./app
 COPY --from=builder /app/configs ./configs
 
 # Le modele est telecharge dans artifacts/hf_model_cache (chemin relatif a
-# la racine du projet, /app ici) au demarrage du conteneur : ce dossier
-# doit etre inscriptible par l'utilisateur non-root.
-RUN mkdir -p /app/artifacts && chown -R appuser:appuser /app/artifacts
+# la racine du projet, /app ici) au demarrage du conteneur. Le sous-dossier
+# doit exister avant le montage du volume Docker pour que le volume herite
+# de droits compatibles avec l'utilisateur non-root.
+RUN mkdir -p /app/artifacts/hf_model_cache/.cache/huggingface \
+    && chown -R appuser:appuser /app/artifacts
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1

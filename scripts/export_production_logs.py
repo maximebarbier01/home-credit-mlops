@@ -14,6 +14,8 @@ from home_credit_mlops.logging_utils import configure_logging
 from home_credit_mlops.monitoring.production import (
     load_api_call_logs,
     load_prediction_logs,
+    load_production_inputs,
+    load_production_outputs,
     production_feature_frame,
     production_prediction_frame,
 )
@@ -67,8 +69,12 @@ def main() -> None:
 
     api_calls = load_api_call_logs(database_url)
     prediction_logs = load_prediction_logs(database_url)
-    production_inputs = production_feature_frame(prediction_logs)
-    production_outputs = production_prediction_frame(prediction_logs)
+    production_inputs = load_production_inputs(database_url)
+    production_outputs = load_production_outputs(database_url)
+    if production_inputs.empty:
+        production_inputs = production_feature_frame(prediction_logs)
+    if production_outputs.empty:
+        production_outputs = production_prediction_frame(prediction_logs)
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         _write_sheet(writer, "api_call_logs", api_calls)

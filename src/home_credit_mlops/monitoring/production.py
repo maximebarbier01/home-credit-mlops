@@ -60,6 +60,53 @@ def load_api_call_logs(database_url: str) -> pd.DataFrame:
     return _parse_json_columns(frame, ("request_payload",))
 
 
+def load_production_inputs(database_url: str) -> pd.DataFrame:
+    """Charge les inputs modele stockes dans la table physique production_inputs."""
+
+    frame = _read_table(database_url, "production_inputs")
+    frame = _parse_json_columns(frame, ("input_payload",))
+    if frame.empty:
+        return pd.DataFrame()
+
+    features = flatten_json_column(frame, "input_payload")
+    metadata_columns = [
+        column
+        for column in ("id", "prediction_log_id", "created_at", "feature_count")
+        if column in frame.columns
+    ]
+    return pd.concat([frame[metadata_columns], features], axis=1)
+
+
+def load_production_outputs(database_url: str) -> pd.DataFrame:
+    """Charge les outputs modele stockes dans la table physique production_outputs."""
+
+    frame = _read_table(database_url, "production_outputs")
+    frame = _parse_json_columns(frame, ("output_payload",))
+    if frame.empty:
+        return pd.DataFrame()
+
+    outputs = flatten_json_column(frame, "output_payload")
+    metadata_columns = [
+        column
+        for column in (
+            "id",
+            "prediction_log_id",
+            "created_at",
+            "default_probability",
+            "business_threshold",
+            "predicted_default",
+            "credit_decision",
+            "latency_ms",
+        )
+        if column in frame.columns
+    ]
+    outputs = outputs.drop(
+        columns=[column for column in metadata_columns if column in outputs.columns],
+        errors="ignore",
+    )
+    return pd.concat([frame[metadata_columns], outputs], axis=1)
+
+
 def flatten_json_column(
     frame: pd.DataFrame,
     column: str,
