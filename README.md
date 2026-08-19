@@ -46,6 +46,46 @@ Le découpage suit un principe simple :
 - `app/` contient l'API FastAPI de production ;
 - `src/home_credit_mlops/` contient la logique réutilisable, testable et importable.
 
+## Rôle des briques de déploiement
+
+Le projet contient plusieurs outils, mais chacun a un rôle distinct :
+
+- **FastAPI** : API métier principale. Elle expose `/health`, `/predict` et
+  `/monitoring/summary`, charge le modèle depuis Hugging Face Hub, applique la
+  décision métier et journalise les appels.
+- **Docker** : empaquette l'API FastAPI avec son environnement Python. L'image
+  peut être construite localement, testée en CI et publiée dans GitHub
+  Container Registry.
+- **Hugging Face model repo** : stockage du modèle MLflow exporté. Le dépôt
+  `mxmbrbr/home-credit-mlops` n'héberge pas l'API ; il sert de source modèle
+  pour l'application.
+- **Hugging Face Space** : hébergement possible d'une application web. Un Space
+  Docker pourrait héberger l'API FastAPI, mais ce mode nécessite un tier payant
+  sur Hugging Face. Un Space Gradio gratuit serait plutôt une démo interactive,
+  pas l'API FastAPI actuelle.
+- **Streamlit** : dashboard local de monitoring situé dans
+  `dashboard/monitoring_app.py`. Il lit les logs SQLAlchemy pour visualiser
+  latences, scores, décisions, erreurs et data drift.
+- **Gradio** : non utilisé comme application dans ce dépôt. Il peut servir plus
+  tard à construire une démo Hugging Face gratuite, mais aucune app Gradio Home
+  Credit n'est actuellement implémentée.
+
+Commandes principales :
+
+```bash
+# API FastAPI locale
+poetry run uvicorn app.main:app --reload --port 8000
+
+# Dashboard Streamlit local
+poetry run streamlit run dashboard/monitoring_app.py
+
+# API + PostgreSQL via Docker Compose
+docker compose up -d --build
+
+# PostgreSQL seul via Docker, API lancee avec Poetry
+docker compose up -d postgres
+```
+
 ## Arborescence
 
 ```text
