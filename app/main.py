@@ -11,6 +11,8 @@ from typing import Any, Callable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.background import BackgroundTask, BackgroundTasks
+from starlette.responses import Response
 
 from app.api.routes import router, register_prediction_routes
 from app.core.config import ApiConfig, load_api_config
@@ -68,6 +70,33 @@ def _http_reason_phrase(status_code: int) -> str:
         return HTTPStatus(status_code).phrase
     except ValueError:
         return f"HTTP {status_code}"
+
+
+def _append_background_task(
+    response: Response,
+    func: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> None:
+    """Ajoute une tâche de fond sans écraser celles créées par FastAPI."""
+
+    if response.background is None:
+        response.background = BackgroundTask(func, *args, **kwargs)
+        return
+
+    tasks = BackgroundTasks()
+    tasks.add_task(response.background)
+    tasks.add_task(func, *args, **kwargs)
+    response.background = tasks
+
+
+def _safe_log_api_call(repository: ApiCallRepository, **kwargs: Any) -> None:
+    """Journalise un appel API sans jamais impacter la réponse HTTP."""
+
+    try:
+        repository(**kwargs)
+    except Exception:
+        LOGGER.exception("API call logging failed after response was sent.")
 
 
 def create_app(
@@ -136,7 +165,6 @@ def create_app(
     async def log_request_timing(request: Request, call_next):
         body = await request.body()
         _restore_request_body(request, body)
-        request_payload = _json_payload_from_body(request, body)
 
         start = time.perf_counter()
         response = await call_next(request)
@@ -152,20 +180,23 @@ def create_app(
         repository = getattr(request.app.state, "api_call_repository", None)
         if repository is not None:
             error_type = f"http_{response.status_code}" if response.status_code >= 400 else None
-            try:
-                repository(
-                    method=request.method,
-                    path=request.url.path,
-                    status_code=response.status_code,
-                    latency_ms=duration_ms,
-                    request_payload=request_payload,
-                    error_type=error_type,
-                    error_message=_http_reason_phrase(response.status_code) if error_type else None,
-                    client_host=request.client.host if request.client else None,
-                    user_agent=request.headers.get("user-agent"),
-                )
-            except Exception:
-                LOGGER.exception("API call logging failed; returning HTTP response anyway.")
+            request_payload = (
+                _json_payload_from_body(request, body) if response.status_code >= 400 else None
+            )
+            _append_background_task(
+                response,
+                _safe_log_api_call,
+                repository,
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                latency_ms=duration_ms,
+                request_payload=request_payload,
+                error_type=error_type,
+                error_message=_http_reason_phrase(response.status_code) if error_type else None,
+                client_host=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
 
         return response
 

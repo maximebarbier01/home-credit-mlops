@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, FastAPI, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, FastAPI, Depends, HTTPException, status
 
 from app.core.security import require_api_key
 from app.db.repository import get_monitoring_summary
@@ -47,10 +47,21 @@ def build_predict_handler(request_model: type, prediction_service: PredictionSer
     voie le vrai type et genere une documentation OpenAPI correcte.
     """
 
-    async def handler(payload):
-        return prediction_service.predict(payload)
+    async def handler(payload, background_tasks: BackgroundTasks):
+        result = prediction_service.score(payload)
+        background_tasks.add_task(
+            prediction_service.log_prediction,
+            result.request_payload,
+            result.response.model_dump(),
+            result.latency_ms,
+        )
+        return result.response
 
-    handler.__annotations__ = {"payload": request_model, "return": PredictionResponse}
+    handler.__annotations__ = {
+        "payload": request_model,
+        "background_tasks": BackgroundTasks,
+        "return": PredictionResponse,
+    }
     return handler
 
 

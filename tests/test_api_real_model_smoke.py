@@ -21,7 +21,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_predict_against_real_published_model() -> None:
+def test_predict_against_real_published_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Le smoke test valide le chargement du vrai modele publie, pas la base locale.
+    monkeypatch.setenv("PREDICTION_LOGGING_ENABLED", "false")
+    monkeypatch.setenv("API_CALL_LOGGING_ENABLED", "false")
+    monkeypatch.delenv("PREDICTION_DB_URL", raising=False)
+
     app = create_app()
 
     with TestClient(app) as client:
