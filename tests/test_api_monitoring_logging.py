@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.core.config import ApiConfig
 from app.db.database import SessionLocal, init_db
-from app.db.models import ApiCallLog, PredictionLog
+from app.db.models import ApiCallLog, PredictionLog, ProductionInput, ProductionOutput
 from app.db.repository import save_api_call_log, save_prediction_log
 from app.main import create_app
 from conftest import StubScoringModel
@@ -55,9 +55,14 @@ def test_api_logs_success_and_validation_error(
             select(ApiCallLog).where(ApiCallLog.path == "/predict").order_by(ApiCallLog.id)
         ).all()
         prediction_logs = session.scalars(select(PredictionLog)).all()
+        production_inputs = session.scalars(select(ProductionInput)).all()
+        production_outputs = session.scalars(select(ProductionOutput)).all()
 
     assert [log.status_code for log in api_logs] == [200, 422]
-    assert api_logs[0].request_payload["AGE_YEARS"] == valid_payload["AGE_YEARS"]
+    assert api_logs[0].request_payload is None
     assert api_logs[1].error_type == "http_422"
+    assert api_logs[1].request_payload["AGE_YEARS"] == valid_payload["AGE_YEARS"]
     assert len(prediction_logs) == 1
     assert prediction_logs[0].response_payload["credit_decision"] == "refused"
+    assert len(production_inputs) == 1
+    assert len(production_outputs) == 1

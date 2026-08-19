@@ -647,6 +647,54 @@ export PREDICTION_DB_URL="postgresql+psycopg://home_credit:home_credit@127.0.0.1
 poetry run python scripts/export_production_logs.py
 ```
 
+## Analyse et optimisation des performances
+
+L'étape d'optimisation s'appuie sur les logs de production déjà collectés :
+latence totale API (`api_call_logs.latency_ms`), latence modèle
+(`production_outputs.latency_ms`), codes HTTP et erreurs. L'objectif n'est pas
+seulement de rendre l'API plus rapide, mais de prouver l'impact des choix avec
+des mesures reproductibles.
+
+Optimisations intégrées :
+
+- le modèle reste chargé une seule fois au démarrage de l'application ;
+- la prédiction est retournée avant l'écriture en base, grâce à des tâches de
+  fond FastAPI ;
+- les payloads valides ne sont plus dupliqués dans `api_call_logs`, car ils
+  sont déjà stockés dans `production_inputs` ;
+- ONNX Runtime et GPU sont documentés comme pistes non retenues à ce stade :
+  le modèle tabulaire LightGBM et le preprocessing Python/MLflow rendent le
+  gain incertain par rapport au risque de régression.
+
+Flux de démonstration recommandé :
+
+```bash
+docker compose up -d --build
+curl -s http://127.0.0.1:8000/health | python -m json.tool
+
+poetry run python scripts/simulate_production_requests.py \
+  --sample-size 100 \
+  --invalid-requests 3
+
+export PREDICTION_DB_URL="postgresql+psycopg://home_credit:home_credit@127.0.0.1:55432/home_credit_monitoring"
+
+poetry run python scripts/profile_api_performance.py \
+  --sample-size 50 \
+  --warmup-requests 5
+
+poetry run python scripts/analyze_api_performance.py
+```
+
+Sorties générées dans `reports/YYYYMMDD_home_credit_performance/...` :
+
+- `api_profile_summary.xlsx` : mesures client par requête et synthèse de
+  latence ;
+- `cprofile_top.txt` : fonctions les plus coûteuses observées côté client ;
+- `performance_summary.xlsx` : latences API, latences modèle, taux d'erreur,
+  goulots d'étranglement et décisions d'optimisation ;
+- `performance_report.md` : rapport lisible pour expliquer les tests,
+  résultats, limites et configuration finale.
+
 ## Qualité et limites
 
 Contrôles disponibles (exécutés automatiquement en CI, voir

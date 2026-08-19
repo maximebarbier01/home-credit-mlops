@@ -1191,7 +1191,106 @@ pour démontrer la persistance et la traçabilité multi-tables. Pour une
 production réelle, il resterait à ajouter une politique de rétention, des
 sauvegardes, une gestion fine des accès et une revue RGPD.
 
-## 17. Nomenclature fichier par fichier
+## 17. Phase 12 : analyse et optimisation des performances post-déploiement
+
+Cette phase transforme les logs de production en diagnostic de performance.
+Elle répond à la question : le modèle est-il seulement juste, ou est-il aussi
+serviable rapidement et de manière robuste dans une API ?
+
+### 17.1 Sources utilisées
+
+Les mesures viennent des tables déjà alimentées par l'API :
+
+- `api_call_logs.latency_ms` : temps de réponse total observé côté API ;
+- `prediction_logs.latency_ms` : temps d'inférence et de préparation métier ;
+- `production_outputs.latency_ms` : latence associée aux réponses métier ;
+- `api_call_logs.status_code` et `error_type` : erreurs opérationnelles.
+
+Le script de profiling ajoute une mesure active en envoyant des requêtes vers
+l'API et en produisant un profil `cProfile` côté client.
+
+### 17.2 Optimisations intégrées
+
+Trois choix ont été intégrés dans l'API :
+
+- le modèle est chargé une seule fois au démarrage, puis réutilisé à chaque
+  requête ;
+- l'écriture des logs de prédiction et d'appels HTTP est déportée en tâche de
+  fond FastAPI, afin que la réponse métier ne dépende pas directement du temps
+  d'écriture PostgreSQL ;
+- les payloads valides ne sont plus dupliqués dans `api_call_logs`, car ils
+  sont déjà persistés dans `production_inputs`. Les payloads invalides restent
+  conservés dans `api_call_logs` pour expliquer les erreurs `422`.
+
+ONNX Runtime et GPU ont été analysés mais non retenus à ce stade. Le modèle
+champion est un modèle tabulaire LightGBM avec un preprocessing Python/MLflow :
+la conversion ONNX augmenterait le risque de divergence entre entraînement et
+serving, tandis que le GPU n'apporte pas de gain évident pour une inférence
+unitaire de scoring crédit.
+
+### 17.3 Commandes de démonstration
+
+Démarrer l'API et PostgreSQL :
+
+```bash
+docker compose up -d --build
+curl -s http://127.0.0.1:8000/health | python -m json.tool
+```
+
+Générer du trafic réaliste :
+
+```bash
+poetry run python scripts/simulate_production_requests.py \
+  --sample-size 100 \
+  --invalid-requests 3
+```
+
+Pointer les scripts d'analyse vers PostgreSQL :
+
+```bash
+export PREDICTION_DB_URL="postgresql+psycopg://home_credit:home_credit@127.0.0.1:55432/home_credit_monitoring"
+```
+
+Profiler l'API :
+
+```bash
+poetry run python scripts/profile_api_performance.py \
+  --sample-size 50 \
+  --warmup-requests 5
+```
+
+Générer le rapport de performance :
+
+```bash
+poetry run python scripts/analyze_api_performance.py
+```
+
+### 17.4 Livrables produits
+
+Les sorties sont créées dans
+`reports/YYYYMMDD_home_credit_performance/YYYYMMDD_HHMMSS_performance/` :
+
+- `api_profile_summary.xlsx` : latences mesurées requête par requête ;
+- `cprofile_top.txt` : fonctions les plus coûteuses dans la boucle de test ;
+- `performance_summary.xlsx` : synthèse des latences, erreurs, goulots
+  d'étranglement et décisions d'optimisation ;
+- `performance_report.md` : rapport textuel détaillant les tests, résultats,
+  limites et configuration finale.
+
+### 17.5 Lecture attendue des résultats
+
+L'analyse compare la latence totale API à la latence modèle. Si la latence API
+est nettement plus élevée que la latence d'inférence, le goulot vient plutôt
+du transport HTTP, de la validation Pydantic ou de la persistance. Si la
+latence modèle domine, l'optimisation doit plutôt cibler le pipeline de
+preprocessing ou le moteur d'inférence.
+
+L'amélioration attendue de la version optimisée vient surtout du logging non
+bloquant : la réponse métier est renvoyée avant les écritures SQL. La base
+reste alimentée pour le monitoring, mais elle n'est plus sur le chemin critique
+de la réponse utilisateur.
+
+## 18. Nomenclature fichier par fichier
 
 ### Points d'entrée
 
@@ -1206,6 +1305,8 @@ sauvegardes, une gestion fine des accès et une revue RGPD.
 | [`scripts/analyze_production_monitoring.py`](../scripts/analyze_production_monitoring.py) | Génère le rapport de monitoring production et data drift |
 | [`scripts/simulate_production_requests.py`](../scripts/simulate_production_requests.py) | Envoie un échantillon de clients vers l'API pour simuler du trafic |
 | [`scripts/export_production_logs.py`](../scripts/export_production_logs.py) | Exporte les logs bruts de production dans un classeur Excel |
+| [`scripts/profile_api_performance.py`](../scripts/profile_api_performance.py) | Profile les appels API et exporte les mesures de latence |
+| [`scripts/analyze_api_performance.py`](../scripts/analyze_api_performance.py) | Génère le rapport d'analyse et d'optimisation des performances |
 | [`scripts/mlflow_ui.py`](../scripts/mlflow_ui.py) | Lance l'interface MLflow locale |
 
 ### Socle applicatif
@@ -1216,6 +1317,7 @@ sauvegardes, une gestion fine des accès et une revue RGPD.
 | [`src/home_credit_mlops/logging_utils.py`](../src/home_credit_mlops/logging_utils.py) | Configure les logs Python |
 | [`src/home_credit_mlops/mlflow_utils.py`](../src/home_credit_mlops/mlflow_utils.py) | Configure MLflow, le registry et l'UI |
 | [`src/home_credit_mlops/reporting/campaign_lookup.py`](../src/home_credit_mlops/reporting/campaign_lookup.py) | Retrouve le champion d'une campagne depuis `campaign_metadata.json` |
+| [`src/home_credit_mlops/performance/report.py`](../src/home_credit_mlops/performance/report.py) | Calcule les indicateurs de performance API et produit le rapport d'optimisation |
 | [`dashboard/monitoring_app.py`](../dashboard/monitoring_app.py) | Dashboard Streamlit local du monitoring production |
 
 ### Données et EDA
@@ -1256,8 +1358,8 @@ sauvegardes, une gestion fine des accès et une revue RGPD.
 | [`app/services/model_service.py`](../app/services/model_service.py) | Télécharge (Hugging Face Hub), charge le modèle et exécute l'inférence |
 | [`app/services/prediction_service.py`](../app/services/prediction_service.py) | Orchestration : scoring, latence, journalisation non bloquante |
 | [`app/db/database.py`](../app/db/database.py) | Connexion SQLAlchemy et création des tables |
-| [`app/db/models.py`](../app/db/models.py) | Modèles SQLAlchemy `PredictionLog` et `ApiCallLog` |
-| [`app/db/repository.py`](../app/db/repository.py) | Ecriture des logs de prédiction et d'appels HTTP |
+| [`app/db/models.py`](../app/db/models.py) | Modèles SQLAlchemy des quatre tables de traçabilité API |
+| [`app/db/repository.py`](../app/db/repository.py) | Ecriture des logs d'appels HTTP, prédictions, inputs et outputs |
 | [`app/core/config.py`](../app/core/config.py) | Configuration API via variables d'environnement |
 | [`app/core/security.py`](../app/core/security.py) | Protection optionnelle par `X-API-Key` |
 | [`Dockerfile`](../Dockerfile) | Image Docker de l'API (multi-stage, `python:3.12-slim`) |
