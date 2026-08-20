@@ -9,6 +9,7 @@ from mlflow.types import ColSpec, DataType, Schema
 from pydantic import ValidationError
 
 from app.schemas.prediction import (
+    build_request_example,
     build_request_model,
     business_rule_validators,
     plausible_range_validators,
@@ -82,6 +83,14 @@ def test_region_rating_client_rejects_out_of_range() -> None:
     model = _build_model("REGION_RATING_CLIENT")
     with pytest.raises(ValidationError, match="must be between 1 and 3"):
         model(REGION_RATING_CLIENT=7)
+
+
+def test_swagger_example_uses_valid_region_rating_values() -> None:
+    schema = _schema_with_fields("REGION_RATING_CLIENT", "REGION_RATING_CLIENT_W_CITY")
+    example = build_request_example(schema)
+
+    assert example["REGION_RATING_CLIENT"] == 1
+    assert example["REGION_RATING_CLIENT_W_CITY"] == 1
 
 
 def test_plausible_range_validators_are_dropped_when_field_absent() -> None:

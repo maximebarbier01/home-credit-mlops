@@ -46,6 +46,46 @@ Le découpage suit un principe simple :
 - `app/` contient l'API FastAPI de production ;
 - `src/home_credit_mlops/` contient la logique réutilisable, testable et importable.
 
+## Rôle des briques de déploiement
+
+Le projet contient plusieurs outils, mais chacun a un rôle distinct :
+
+- **FastAPI** : API métier principale. Elle expose `/health`, `/predict` et
+  `/monitoring/summary`, charge le modèle depuis Hugging Face Hub, applique la
+  décision métier et journalise les appels.
+- **Docker** : empaquette l'API FastAPI avec son environnement Python. L'image
+  peut être construite localement, testée en CI et publiée dans GitHub
+  Container Registry.
+- **Hugging Face model repo** : stockage du modèle MLflow exporté. Le dépôt
+  `mxmbrbr/home-credit-mlops` n'héberge pas l'API ; il sert de source modèle
+  pour l'application.
+- **Hugging Face Space** : hébergement possible d'une application web. Un Space
+  Docker pourrait héberger l'API FastAPI, mais ce mode nécessite un tier payant
+  sur Hugging Face. Un Space Gradio gratuit serait plutôt une démo interactive,
+  pas l'API FastAPI actuelle.
+- **Streamlit** : dashboard local de monitoring situé dans
+  `dashboard/monitoring_app.py`. Il lit les logs SQLAlchemy pour visualiser
+  latences, scores, décisions, erreurs et data drift.
+- **Gradio** : non utilisé comme application dans ce dépôt. Il peut servir plus
+  tard à construire une démo Hugging Face gratuite, mais aucune app Gradio Home
+  Credit n'est actuellement implémentée.
+
+Commandes principales :
+
+```bash
+# API FastAPI locale
+poetry run uvicorn app.main:app --reload --port 8000
+
+# Dashboard Streamlit local
+poetry run streamlit run dashboard/monitoring_app.py
+
+# API + PostgreSQL via Docker Compose
+docker compose up -d --build
+
+# PostgreSQL seul via Docker, API lancee avec Poetry
+docker compose up -d postgres
+```
+
 ## Arborescence
 
 ```text
@@ -578,11 +618,16 @@ explicables : PSI, KS test, variation de taux de valeurs manquantes. Si le
 volume de production est trop faible, le niveau de drift est marqué
 `insufficient_data` plutôt que sur-interprété.
 
-### Démo locale du monitoring
+### Démo locale du monitoring avec SQLite
+
+SQLite est le mode local le plus simple : aucune base externe n'est nécessaire.
+Si une variable `PREDICTION_DB_URL` PostgreSQL est encore présente dans le
+terminal, elle doit être retirée avant de démarrer l'API.
 
 1. Démarrer l'API :
 
 ```bash
+unset PREDICTION_DB_URL
 poetry run uvicorn app.main:app --reload --port 8000
 ```
 
@@ -614,13 +659,36 @@ poetry run streamlit run dashboard/monitoring_app.py
 
 ### Démo PostgreSQL avec les quatre tables de traçabilité
 
-1. Lancer PostgreSQL et l'API :
+Deux modes sont possibles :
+
+- API et PostgreSQL dans Docker Compose : utiliser l'URL interne
+  `postgres:5432` déjà configurée dans `docker-compose.yml` ;
+- API lancée localement avec Poetry + PostgreSQL dans Docker : utiliser
+  `127.0.0.1:55432`, car le hostname `postgres` n'existe que dans le réseau
+  Docker Compose.
+
+1. Lancer uniquement PostgreSQL dans Docker :
 
 ```bash
-docker compose up --build
+docker compose up -d postgres
+docker compose ps
+docker compose exec postgres pg_isready \
+  -U maximebarbier \
+  -d home_credit_monitoring
 ```
 
-2. Simuler du trafic :
+2. Démarrer l'API localement avec PostgreSQL :
+
+```bash
+export PREDICTION_DB_URL="postgresql+psycopg://maximebarbier:%40udrey29Le@127.0.0.1:55432/home_credit_monitoring"
+poetry run uvicorn app.main:app --reload --port 8000
+```
+
+Le mot de passe contient un `@` ; dans une URL SQLAlchemy, ce caractère doit
+être encodé en `%40`. Sans PostgreSQL démarré, l'API renverra une erreur
+`Connection refused` au démarrage.
+
+3. Simuler du trafic :
 
 ```bash
 poetry run python scripts/simulate_production_requests.py \
@@ -628,11 +696,11 @@ poetry run python scripts/simulate_production_requests.py \
   --invalid-requests 3
 ```
 
-3. Vérifier les quatre tables dans PostgreSQL :
+4. Vérifier les quatre tables dans PostgreSQL :
 
 ```bash
 docker compose exec postgres psql \
-  -U home_credit \
+  -U maximebarbier \
   -d home_credit_monitoring \
   -c "SELECT 'api_call_logs' AS table_name, COUNT(*) FROM api_call_logs
       UNION ALL SELECT 'prediction_logs', COUNT(*) FROM prediction_logs
@@ -640,10 +708,10 @@ docker compose exec postgres psql \
       UNION ALL SELECT 'production_outputs', COUNT(*) FROM production_outputs;"
 ```
 
-4. Exporter les quatre tables dans un classeur Excel :
+5. Exporter les quatre tables dans un classeur Excel :
 
 ```bash
-export PREDICTION_DB_URL="postgresql+psycopg://home_credit:home_credit@127.0.0.1:55432/home_credit_monitoring"
+export PREDICTION_DB_URL="postgresql+psycopg://maximebarbier:%40udrey29Le@127.0.0.1:55432/home_credit_monitoring"
 poetry run python scripts/export_production_logs.py
 ```
 
@@ -669,14 +737,14 @@ Optimisations intégrées :
 Flux de démonstration recommandé :
 
 ```bash
-docker compose up -d --build
+docker compose up -d postgres
 curl -s http://127.0.0.1:8000/health | python -m json.tool
 
 poetry run python scripts/simulate_production_requests.py \
   --sample-size 100 \
   --invalid-requests 3
 
-export PREDICTION_DB_URL="postgresql+psycopg://home_credit:home_credit@127.0.0.1:55432/home_credit_monitoring"
+export PREDICTION_DB_URL="postgresql+psycopg://maximebarbier:%40udrey29Le@127.0.0.1:55432/home_credit_monitoring"
 
 poetry run python scripts/profile_api_performance.py \
   --sample-size 50 \

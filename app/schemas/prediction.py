@@ -202,6 +202,8 @@ def _example_value_for_col_spec(col_spec: mlflow.types.ColSpec) -> Any:
         "CNT_CHILDREN": 1,
         "CNT_FAM_MEMBERS": 3.0,
         "CODE_GENDER": "F",
+        "REGION_RATING_CLIENT": 1,
+        "REGION_RATING_CLIENT_W_CITY": 1,
     }
     if col_spec.name in known_examples:
         return known_examples[col_spec.name]
