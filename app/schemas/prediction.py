@@ -7,6 +7,9 @@ colonnes réellement attendues par le champion servi.
 
 from __future__ import annotations
 
+import logging
+import os
+from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
 import mlflow.types
@@ -14,7 +17,12 @@ import pandas as pd
 from mlflow.types import DataType
 from pydantic import BaseModel, ConfigDict, create_model, field_validator
 
+from home_credit_mlops.settings import PROJECT_ROOT
+
 REQUEST_MODEL_NAME = "CreditScoringRequest"
+REQUEST_EXAMPLE_DATA_PATH_ENV = "HOME_CREDIT_REQUEST_EXAMPLE_DATA"
+DEFAULT_REQUEST_EXAMPLE_DATA_PATH = PROJECT_ROOT / "data" / "processed" / "train_features.parquet"
+LOGGER = logging.getLogger(__name__)
 
 BINARY_FLAG_COLUMNS = [
     "FLAG_MOBIL",
@@ -195,6 +203,8 @@ def plausible_range_validators() -> list[tuple[str, str, Any]]:
 
 
 def _example_value_for_col_spec(col_spec: mlflow.types.ColSpec) -> Any:
+    """Retourne une valeur de secours quand aucune statistique locale n'existe."""
+
     known_examples = {
         "AGE_YEARS": 35.0,
         "AMT_INCOME_TOTAL": 50_000.0,
@@ -216,11 +226,114 @@ def _example_value_for_col_spec(col_spec: mlflow.types.ColSpec) -> Any:
     return 0.0
 
 
-def build_request_example(input_schema: mlflow.types.Schema) -> dict[str, Any]:
-    """Genere un exemple Swagger coherent avec la signature MLflow."""
+def resolve_request_example_data_path() -> Path | None:
+    """Retourne le dataset local utilisé pour rendre l'exemple Swagger réaliste."""
+
+    configured_path = os.environ.get(REQUEST_EXAMPLE_DATA_PATH_ENV)
+    if configured_path:
+        path = Path(configured_path)
+        path = path if path.is_absolute() else PROJECT_ROOT / path
+        if path.exists():
+            return path
+        LOGGER.warning(
+            "%s=%s does not exist; Swagger will use fallback request examples.",
+            REQUEST_EXAMPLE_DATA_PATH_ENV,
+            path,
+        )
+        return None
+
+    if DEFAULT_REQUEST_EXAMPLE_DATA_PATH.exists():
+        return DEFAULT_REQUEST_EXAMPLE_DATA_PATH
+    return None
+
+
+def _coerce_example_value(value: Any, col_spec: mlflow.types.ColSpec) -> Any:
+    """Convertit une statistique pandas vers un type JSON/Pydantic compatible."""
+
+    if pd.isna(value):
+        return None
+
+    if hasattr(value, "item"):
+        value = value.item()
+
+    if col_spec.type in {DataType.integer, DataType.long}:
+        return int(round(float(value)))
+    if col_spec.type in {DataType.float, DataType.double}:
+        return float(value)
+    if col_spec.type == DataType.boolean:
+        return bool(value)
+    if col_spec.type == DataType.string:
+        return str(value)
+    return value
+
+
+def _reference_value_for_col_spec(
+    series: pd.Series,
+    col_spec: mlflow.types.ColSpec,
+) -> Any:
+    """Calcule une médiane numérique ou un mode catégoriel pour une feature."""
+
+    non_null = series.dropna()
+    if non_null.empty:
+        return None
+
+    if col_spec.type in {DataType.integer, DataType.long, DataType.float, DataType.double}:
+        numeric_values = pd.to_numeric(non_null, errors="coerce").dropna()
+        if numeric_values.empty:
+            return None
+        return _coerce_example_value(numeric_values.median(), col_spec)
+
+    mode_values = non_null.mode(dropna=True)
+    if mode_values.empty:
+        return None
+    return _coerce_example_value(mode_values.iloc[0], col_spec)
+
+
+def build_reference_request_example(
+    input_schema: mlflow.types.Schema,
+    reference_data_path: str | Path,
+) -> dict[str, Any]:
+    """Calcule l'exemple Swagger depuis le train : médiane numérique, mode catégoriel."""
+
+    required_specs = [col_spec for col_spec in input_schema.inputs if col_spec.required]
+    required_columns = [col_spec.name for col_spec in required_specs]
+
+    try:
+        reference_frame = pd.read_parquet(reference_data_path, columns=required_columns)
+    except Exception:
+        LOGGER.exception(
+            "Could not build Swagger request example from %s; fallback values will be used.",
+            reference_data_path,
+        )
+        return {}
+
+    example: dict[str, Any] = {}
+    for col_spec in required_specs:
+        value = _reference_value_for_col_spec(reference_frame[col_spec.name], col_spec)
+        if value is not None:
+            example[col_spec.name] = value
+    return example
+
+
+def build_request_example(
+    input_schema: mlflow.types.Schema,
+    reference_data_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Genere un exemple Swagger coherent avec la signature MLflow.
+
+    Quand un dataset de reference est disponible, les numeriques utilisent la
+    médiane et les catégorielles le mode. Sinon, des valeurs de secours
+    compatibles avec le schema sont utilisées.
+    """
+
+    reference_example = (
+        build_reference_request_example(input_schema, reference_data_path)
+        if reference_data_path is not None
+        else {}
+    )
 
     return {
-        col_spec.name: _example_value_for_col_spec(col_spec)
+        col_spec.name: reference_example.get(col_spec.name, _example_value_for_col_spec(col_spec))
         for col_spec in input_schema.inputs
         if col_spec.required
     }
@@ -229,6 +342,7 @@ def build_request_example(input_schema: mlflow.types.Schema) -> dict[str, Any]:
 def build_request_model(
     input_schema: mlflow.types.Schema,
     extra_validators: list[tuple[str, str, Any]] | None = None,
+    reference_data_path: str | Path | None = None,
 ) -> type[BaseModel]:
     """Construit dynamiquement le modele Pydantic de requete."""
 
@@ -251,7 +365,14 @@ def build_request_model(
     return create_model(
         REQUEST_MODEL_NAME,
         __base__=BaseModel,
-        __config__=ConfigDict(json_schema_extra={"example": build_request_example(input_schema)}),
+        __config__=ConfigDict(
+            json_schema_extra={
+                "example": build_request_example(
+                    input_schema,
+                    reference_data_path=reference_data_path,
+                )
+            }
+        ),
         __validators__=applicable_validators,
         **fields,
     )

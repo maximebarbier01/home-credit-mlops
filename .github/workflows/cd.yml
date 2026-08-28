@@ -57,3 +57,11 @@ jobs:
           docker push "$IMAGE:$SHA"
           docker push "$IMAGE:latest"
           echo "Deployed image: $IMAGE:latest"
+
+      - name: Trigger Render deploy
+        # Optionnel : ne s'active que si le secret RENDER_DEPLOY_HOOK_URL est
+        # configure (Render > service > Settings > Deploy Hook). Sans lui,
+        # cette etape est un no-op silencieux : le pipeline reste utilisable
+        # sans hebergement externe (voir README, "Pourquoi ghcr.io").
+        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
