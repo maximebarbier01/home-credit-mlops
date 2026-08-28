@@ -118,13 +118,22 @@ def build_optimization_decisions() -> pd.DataFrame:
             },
             {
                 "decision": "ONNX Runtime",
-                "status": "écarté à ce stade",
+                "status": "testé, écarté",
                 "rationale": (
-                    "Le modèle servi est un pipeline Python/MLflow avec preprocessing et LightGBM. "
-                    "Une conversion ONNX introduirait un risque de régression fonctionnelle et "
-                    "doit être justifiée par un goulot modèle clairement mesuré."
+                    "Conversion réelle du pipeline champion (preprocessing scikit-learn + "
+                    "LightGBM) en ONNX, testée sur des lignes réelles (voir "
+                    "scripts/benchmark_onnx_inference.py) : inférence ~5x plus rapide en latence "
+                    "unitaire (natif ~11.8 ms moyenne / p99 25.4 ms vs ONNX ~2.4 ms moyenne / "
+                    "p99 4.0 ms), mais écart numérique non nul sur default_probability (max "
+                    "0.058, moyenne 0.0035 sur 2000 lignes) qui fait basculer 8/2000 décisions "
+                    "crédit (0.4%) près du seuil métier. Le gain de latence ne justifie pas un "
+                    "risque de régression sur des décisions de crédit individuelles."
                 ),
-                "risk": "À réévaluer si la latence modèle devient le goulot principal.",
+                "risk": (
+                    "Confirmé par le test : régression fonctionnelle réelle, non hypothétique. "
+                    "À réévaluer seulement avec un budget de tolérance explicite sur les "
+                    "décisions proches du seuil, validé par l'équipe métier."
+                ),
             },
             {
                 "decision": "CPU plutôt que GPU",
@@ -267,7 +276,9 @@ def _write_markdown_report(
             "",
             "- API FastAPI conteneurisée, modèle chargé une seule fois au démarrage.",
             "- PostgreSQL pour la traçabilité des appels, inputs et outputs.",
-            "- Inférence CPU LightGBM conservée, sans GPU ni ONNX à ce stade.",
+            "- Inférence CPU LightGBM native conservée : ONNX Runtime a été testé "
+            "(scripts/benchmark_onnx_inference.py) et écarté après mesure d'une régression "
+            "fonctionnelle réelle sur les décisions proches du seuil métier.",
             "- Tests CI/CD inchangés : lint, tests unitaires, build Docker et smoke test API.",
             "",
         ]

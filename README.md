@@ -662,6 +662,10 @@ poetry run streamlit run dashboard/monitoring_app.py
 
 ### Démo PostgreSQL avec les quatre tables de traçabilité
 
+Les identifiants PostgreSQL ne sont plus codés en dur : `docker-compose.yml`
+lit `POSTGRES_DB`/`POSTGRES_USER`/`POSTGRES_PASSWORD` depuis un fichier `.env`
+local (jamais commité, voir `.env.example` à copier et personnaliser).
+
 Deux modes sont possibles :
 
 - API et PostgreSQL dans Docker Compose : utiliser l'URL interne
@@ -670,28 +674,36 @@ Deux modes sont possibles :
   `127.0.0.1:55432`, car le hostname `postgres` n'existe que dans le réseau
   Docker Compose.
 
-1. Lancer uniquement PostgreSQL dans Docker :
+1. Créer le fichier d'identifiants local (une seule fois) :
+
+```bash
+cp .env.example .env
+# éditer .env et choisir un mot de passe local, sans caractère spécial d'URL
+```
+
+2. Lancer uniquement PostgreSQL dans Docker :
 
 ```bash
 docker compose up -d postgres
 docker compose ps
 docker compose exec postgres pg_isready \
-  -U maximebarbier \
+  -U "$POSTGRES_USER" \
   -d home_credit_monitoring
 ```
 
-2. Démarrer l'API localement avec PostgreSQL :
+3. Démarrer l'API localement avec PostgreSQL (reprendre les valeurs de `.env`) :
 
 ```bash
-export PREDICTION_DB_URL="postgresql+psycopg://maximebarbier:%40udrey29Le@127.0.0.1:55432/home_credit_monitoring"
+export PREDICTION_DB_URL="postgresql+psycopg://<POSTGRES_USER>:<POSTGRES_PASSWORD>@127.0.0.1:55432/home_credit_monitoring"
 poetry run uvicorn app.main:app --reload --port 8000
 ```
 
-Le mot de passe contient un `@` ; dans une URL SQLAlchemy, ce caractère doit
-être encodé en `%40`. Sans PostgreSQL démarré, l'API renverra une erreur
-`Connection refused` au démarrage.
+Si le mot de passe choisi contient un caractère spécial d'URL (`@ : / %`),
+il doit être percent-encodé dans `PREDICTION_DB_URL` (ex. `@` → `%40`). Sans
+PostgreSQL démarré, l'API renverra une erreur `Connection refused` au
+démarrage.
 
-3. Simuler du trafic :
+4. Simuler du trafic :
 
 ```bash
 poetry run python scripts/simulate_production_requests.py \
@@ -699,11 +711,11 @@ poetry run python scripts/simulate_production_requests.py \
   --invalid-requests 3
 ```
 
-4. Vérifier les quatre tables dans PostgreSQL :
+5. Vérifier les quatre tables dans PostgreSQL :
 
 ```bash
 docker compose exec postgres psql \
-  -U maximebarbier \
+  -U "$POSTGRES_USER" \
   -d home_credit_monitoring \
   -c "SELECT 'api_call_logs' AS table_name, COUNT(*) FROM api_call_logs
       UNION ALL SELECT 'prediction_logs', COUNT(*) FROM prediction_logs
@@ -711,10 +723,10 @@ docker compose exec postgres psql \
       UNION ALL SELECT 'production_outputs', COUNT(*) FROM production_outputs;"
 ```
 
-5. Exporter les quatre tables dans un classeur Excel :
+6. Exporter les quatre tables dans un classeur Excel :
 
 ```bash
-export PREDICTION_DB_URL="postgresql+psycopg://maximebarbier:%40udrey29Le@127.0.0.1:55432/home_credit_monitoring"
+export PREDICTION_DB_URL="postgresql+psycopg://<POSTGRES_USER>:<POSTGRES_PASSWORD>@127.0.0.1:55432/home_credit_monitoring"
 poetry run python scripts/export_production_logs.py
 ```
 
@@ -733,9 +745,26 @@ Optimisations intégrées :
   fond FastAPI ;
 - les payloads valides ne sont plus dupliqués dans `api_call_logs`, car ils
   sont déjà stockés dans `production_inputs` ;
-- ONNX Runtime et GPU sont documentés comme pistes non retenues à ce stade :
-  le modèle tabulaire LightGBM et le preprocessing Python/MLflow rendent le
-  gain incertain par rapport au risque de régression.
+- ONNX Runtime a été **testé** (conversion réelle du pipeline champion,
+  benchmark sur des lignes réelles, voir
+  [`scripts/benchmark_onnx_inference.py`](scripts/benchmark_onnx_inference.py))
+  et **écarté après mesure** : ~5x plus rapide en latence unitaire (natif
+  ~11.8 ms moyenne / p99 25.4 ms vs ONNX ~2.4 ms moyenne / p99 4.0 ms sur 200
+  requêtes), mais avec un écart numérique sur `default_probability` qui fait
+  basculer 8 décisions crédit sur 2000 (0.4%) proches du seuil métier — une
+  régression jugée trop risqueuse pour un gain de latence qui n'était de
+  toute façon pas le goulot dominant (voir `identify_bottlenecks` dans le
+  rapport de performance) ;
+- GPU écarté sur la même base : LightGBM en inférence tabulaire est adapté
+  au CPU, le GPU ajouterait de la complexité de déploiement pour un gain
+  incertain sur des requêtes unitaires.
+
+Rejouer le test ONNX :
+
+```bash
+poetry install --with onnx-benchmark
+poetry run python scripts/benchmark_onnx_inference.py
+```
 
 Flux de démonstration recommandé :
 
@@ -747,7 +776,7 @@ poetry run python scripts/simulate_production_requests.py \
   --sample-size 100 \
   --invalid-requests 3
 
-export PREDICTION_DB_URL="postgresql+psycopg://maximebarbier:%40udrey29Le@127.0.0.1:55432/home_credit_monitoring"
+export PREDICTION_DB_URL="postgresql+psycopg://<POSTGRES_USER>:<POSTGRES_PASSWORD>@127.0.0.1:55432/home_credit_monitoring"
 
 poetry run python scripts/profile_api_performance.py \
   --sample-size 50 \

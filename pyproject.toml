@@ -50,6 +50,16 @@ pydantic = ">=2.13,<3.0"
 sqlalchemy = ">=2.0,<3.0"
 psycopg = {version = ">=3.2,<4.0", extras = ["binary"]}
 
+
+[tool.poetry.group.onnx-benchmark]
+optional = true
+
+[tool.poetry.group.onnx-benchmark.dependencies]
+onnx = "^1.22.0"
+onnxruntime = "^1.29.0"
+skl2onnx = "^1.20.0"
+onnxmltools = "^1.16.0"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
