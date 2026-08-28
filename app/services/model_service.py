@@ -81,7 +81,7 @@ class ModelService:
         local_dir = self._resolve_model(serving)
         self.model = self._load_model(local_dir)
         self.input_schema = self.model.metadata.get_input_schema()
-        request_example_data_path = resolve_request_example_data_path()
+        request_example_data_path = resolve_request_example_data_path(local_dir)
         if request_example_data_path is not None:
             LOGGER.info("Building Swagger request example from %s", request_example_data_path)
         self.request_model = build_request_model(

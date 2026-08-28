@@ -7,6 +7,7 @@ colonnes réellement attendues par le champion servi.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -226,8 +227,8 @@ def _example_value_for_col_spec(col_spec: mlflow.types.ColSpec) -> Any:
     return 0.0
 
 
-def resolve_request_example_data_path() -> Path | None:
-    """Retourne le dataset local utilisé pour rendre l'exemple Swagger réaliste."""
+def resolve_request_example_data_path(model_dir: str | Path | None = None) -> Path | None:
+    """Retourne la source utilisée pour rendre l'exemple Swagger réaliste."""
 
     configured_path = os.environ.get(REQUEST_EXAMPLE_DATA_PATH_ENV)
     if configured_path:
@@ -244,6 +245,14 @@ def resolve_request_example_data_path() -> Path | None:
 
     if DEFAULT_REQUEST_EXAMPLE_DATA_PATH.exists():
         return DEFAULT_REQUEST_EXAMPLE_DATA_PATH
+
+    if model_dir is not None:
+        model_path = Path(model_dir)
+        for example_file_name in ("input_example.json", "serving_input_example.json"):
+            example_path = model_path / example_file_name
+            if example_path.exists():
+                return example_path
+
     return None
 
 
@@ -289,6 +298,27 @@ def _reference_value_for_col_spec(
     return _coerce_example_value(mode_values.iloc[0], col_spec)
 
 
+def _read_reference_frame(
+    reference_data_path: str | Path, required_columns: list[str]
+) -> pd.DataFrame:
+    """Charge une source d'exemple Parquet ou JSON MLflow."""
+
+    path = Path(reference_data_path)
+    if path.suffix == ".parquet":
+        return pd.read_parquet(path, columns=required_columns)
+
+    if path.suffix == ".json":
+        payload = json.loads(path.read_text())
+        if "dataframe_split" in payload:
+            payload = payload["dataframe_split"]
+        if {"columns", "data"}.issubset(payload):
+            frame = pd.DataFrame(payload["data"], columns=payload["columns"])
+            available_columns = [column for column in required_columns if column in frame.columns]
+            return frame[available_columns]
+
+    raise ValueError(f"Unsupported request example source: {path}")
+
+
 def build_reference_request_example(
     input_schema: mlflow.types.Schema,
     reference_data_path: str | Path,
@@ -299,7 +329,7 @@ def build_reference_request_example(
     required_columns = [col_spec.name for col_spec in required_specs]
 
     try:
-        reference_frame = pd.read_parquet(reference_data_path, columns=required_columns)
+        reference_frame = _read_reference_frame(reference_data_path, required_columns)
     except Exception:
         LOGGER.exception(
             "Could not build Swagger request example from %s; fallback values will be used.",
@@ -309,6 +339,8 @@ def build_reference_request_example(
 
     example: dict[str, Any] = {}
     for col_spec in required_specs:
+        if col_spec.name not in reference_frame.columns:
+            continue
         value = _reference_value_for_col_spec(reference_frame[col_spec.name], col_spec)
         if value is not None:
             example[col_spec.name] = value

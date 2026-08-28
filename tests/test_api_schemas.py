@@ -10,10 +10,13 @@ import pandas as pd
 from pydantic import ValidationError
 
 from app.schemas.prediction import (
+    DEFAULT_REQUEST_EXAMPLE_DATA_PATH,
+    REQUEST_EXAMPLE_DATA_PATH_ENV,
     build_request_example,
     build_request_model,
     business_rule_validators,
     plausible_range_validators,
+    resolve_request_example_data_path,
 )
 
 
@@ -116,6 +119,52 @@ def test_swagger_example_uses_reference_medians_and_modes(tmp_path) -> None:
     assert example["AMT_CREDIT"] == 300_000.0
     assert example["CODE_GENDER"] == "F"
     assert example["REGION_RATING_CLIENT"] == 3
+
+
+def test_swagger_example_can_use_mlflow_input_example_json(tmp_path) -> None:
+    schema = Schema(
+        [
+            ColSpec(DataType.double, "AMT_CREDIT", required=True),
+            ColSpec(DataType.string, "CODE_GENDER", required=True),
+        ]
+    )
+    reference_path = tmp_path / "input_example.json"
+    reference_path.write_text(
+        """
+        {
+          "columns": ["AMT_CREDIT", "CODE_GENDER"],
+          "data": [
+            [100000.0, "M"],
+            [300000.0, "F"],
+            [500000.0, "F"]
+          ]
+        }
+        """
+    )
+
+    example = build_request_example(schema, reference_data_path=reference_path)
+
+    assert example["AMT_CREDIT"] == 300_000.0
+    assert example["CODE_GENDER"] == "F"
+
+
+def test_request_example_resolver_can_fall_back_to_model_input_example(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    input_example = model_dir / "input_example.json"
+    input_example.write_text('{"columns": ["AMT_CREDIT"], "data": [[100000.0]]}')
+
+    monkeypatch.delenv(REQUEST_EXAMPLE_DATA_PATH_ENV, raising=False)
+    monkeypatch.setattr(
+        "app.schemas.prediction.DEFAULT_REQUEST_EXAMPLE_DATA_PATH",
+        tmp_path / "missing_train_features.parquet",
+    )
+
+    assert DEFAULT_REQUEST_EXAMPLE_DATA_PATH.name == "train_features.parquet"
+    assert resolve_request_example_data_path(model_dir) == input_example
 
 
 def test_plausible_range_validators_are_dropped_when_field_absent() -> None:
