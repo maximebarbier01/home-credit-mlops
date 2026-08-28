@@ -124,6 +124,9 @@ home-credit-mlops/
 Une nomenclature détaillée, fichier par fichier, est disponible dans
 [`docs/mode_emploi_pipeline_ml.md`](docs/mode_emploi_pipeline_ml.md).
 
+Un guide d'utilisation complet et orienté démonstration est disponible dans
+[`docs/guide_utilisation_complet.md`](docs/guide_utilisation_complet.md).
+
 ## Prérequis et installation
 
 - WSL 2 avec Ubuntu pour l'environnement de développement actuel ;
