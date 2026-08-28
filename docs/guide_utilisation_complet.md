@@ -720,19 +720,19 @@ de `cd.yml`).
 URL publique :
 
 ```text
-https://home-credit-mlops-api.onrender.com
+https://home-credit-mlops-7dvw.onrender.com
 ```
 
 Verifier que l'API est en ligne :
 
 ```bash
-curl -s https://home-credit-mlops-api.onrender.com/health | python -m json.tool
+curl -s https://home-credit-mlops-7dvw.onrender.com/health | python -m json.tool
 ```
 
 Swagger en ligne :
 
 ```text
-https://home-credit-mlops-api.onrender.com/docs
+https://home-credit-mlops-7dvw.onrender.com/docs
 ```
 
 ### Limites du tier gratuit
@@ -965,7 +965,7 @@ Reveiller et verifier l'API en ligne sur Render (quelques minutes avant le
 passage, pour eviter le cold start devant le jury) :
 
 ```bash
-curl -s https://home-credit-mlops-api.onrender.com/health | python -m json.tool
+curl -s https://home-credit-mlops-7dvw.onrender.com/health | python -m json.tool
 ```
 
 Verifier les logs :
