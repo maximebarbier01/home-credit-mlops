@@ -20,6 +20,7 @@ from app.schemas.prediction import (
     business_rule_validators,
     coerce_frame_dtypes,
     plausible_range_validators,
+    resolve_request_example_data_path,
 )
 from home_credit_mlops.settings import ServingConfig
 
@@ -80,9 +81,13 @@ class ModelService:
         local_dir = self._resolve_model(serving)
         self.model = self._load_model(local_dir)
         self.input_schema = self.model.metadata.get_input_schema()
+        request_example_data_path = resolve_request_example_data_path()
+        if request_example_data_path is not None:
+            LOGGER.info("Building Swagger request example from %s", request_example_data_path)
         self.request_model = build_request_model(
             self.input_schema,
             business_rule_validators() + plausible_range_validators(),
+            reference_data_path=request_example_data_path,
         )
 
     def predict(self, payload: dict[str, Any]) -> PredictionResponse:

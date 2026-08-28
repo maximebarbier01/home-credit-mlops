@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import pytest
 from mlflow.types import ColSpec, DataType, Schema
+import pandas as pd
 from pydantic import ValidationError
 
 from app.schemas.prediction import (
@@ -91,6 +92,30 @@ def test_swagger_example_uses_valid_region_rating_values() -> None:
 
     assert example["REGION_RATING_CLIENT"] == 1
     assert example["REGION_RATING_CLIENT_W_CITY"] == 1
+
+
+def test_swagger_example_uses_reference_medians_and_modes(tmp_path) -> None:
+    schema = Schema(
+        [
+            ColSpec(DataType.double, "AMT_CREDIT", required=True),
+            ColSpec(DataType.string, "CODE_GENDER", required=True),
+            ColSpec(DataType.integer, "REGION_RATING_CLIENT", required=True),
+        ]
+    )
+    reference_path = tmp_path / "train_features.parquet"
+    pd.DataFrame(
+        {
+            "AMT_CREDIT": [100_000.0, 300_000.0, 500_000.0],
+            "CODE_GENDER": ["F", "M", "F"],
+            "REGION_RATING_CLIENT": [1, 3, 3],
+        }
+    ).to_parquet(reference_path)
+
+    example = build_request_example(schema, reference_data_path=reference_path)
+
+    assert example["AMT_CREDIT"] == 300_000.0
+    assert example["CODE_GENDER"] == "F"
+    assert example["REGION_RATING_CLIENT"] == 3
 
 
 def test_plausible_range_validators_are_dropped_when_field_absent() -> None:
