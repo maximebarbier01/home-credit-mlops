@@ -2,7 +2,8 @@
 
 Ce guide explique comment utiliser le projet de bout en bout : entrainement,
 MLflow, API FastAPI, securite par API key, Docker, PostgreSQL, monitoring,
-dashboard Streamlit et analyse des performances.
+dashboard Streamlit, analyse des performances (dont un test d'optimisation
+ONNX Runtime) et deploiement public sur Render.
 
 Il peut servir de support de demonstration pendant une revue technique ou une
 soutenance.
@@ -19,8 +20,9 @@ data/raw
 -> MLflow + rapports de modelisation
 -> export_model_for_serving.py
 -> Hugging Face model repo
--> API FastAPI
--> logs SQLite ou PostgreSQL
+-> API FastAPI (Docker)
+-> ci.yml (tests + build) -> cd.yml (push GitHub Container Registry)
+-> Render (API publique) + PostgreSQL/SQLite (logs)
 -> monitoring + Streamlit + rapports de performance
 ```
 
@@ -31,8 +33,11 @@ Roles des briques principales :
 - `app/` contient l'API FastAPI de scoring.
 - `dashboard/` contient le dashboard Streamlit de monitoring.
 - `Dockerfile` contient l'image de l'API.
-- `docker-compose.yml` lance PostgreSQL et/ou l'API en conteneurs.
+- `docker-compose.yml` lance PostgreSQL et/ou l'API en conteneurs (identifiants
+  lus depuis un fichier `.env` local, jamais commite).
 - `configs/default.toml` centralise la configuration ML et serving.
+- `.github/workflows/ci.yml` et `cd.yml` testent puis publient l'image sur
+  GitHub Container Registry, qui alimente le service Render en production.
 
 ## 2. Hugging Face, Docker, FastAPI, Streamlit et Gradio
 
@@ -121,24 +126,41 @@ Sans `PREDICTION_DB_URL`, l'API utilise SQLite :
 artifacts/production_predictions.db
 ```
 
-Avec PostgreSQL local expose par Docker Compose, utiliser :
+#### Fichier `.env` (identifiants PostgreSQL)
+
+`docker-compose.yml` ne contient plus d'identifiants PostgreSQL en dur (un mot
+de passe en clair a fuite un temps sur le depot GitHub public avant d'etre
+corrige). Les identifiants sont lus depuis un fichier `.env` local, jamais
+commite (deja dans `.gitignore`).
+
+Creer le fichier une seule fois :
 
 ```bash
-export PREDICTION_DB_URL="postgresql+psycopg://maximebarbier:<MOT_DE_PASSE_ENCODE>@127.0.0.1:55432/home_credit_monitoring"
+cp .env.example .env
 ```
 
-Si le mot de passe contient le caractere `@`, il doit etre encode en `%40`
-dans l'URL SQLAlchemy.
+`.env.example` fournit deja des valeurs par defaut fonctionnelles
+(`POSTGRES_USER=home_credit`, `POSTGRES_DB=home_credit_monitoring`,
+`POSTGRES_PASSWORD=changeme`). Modifier `POSTGRES_PASSWORD` si besoin, mais
+**eviter tout caractere special d'URL** (`@ : / % espace`) : `docker-compose.yml`
+construit `PREDICTION_DB_URL` en concatenant directement ces variables, sans
+encodage. Un caractere special casse silencieusement le parsing de l'URL cote
+API (voir section 20, "Depannage rapide").
 
-Exemple :
+Avec PostgreSQL local expose par Docker Compose (`docker compose up -d postgres`),
+pour lancer l'API en dehors de Docker (via Poetry) et la connecter a ce
+PostgreSQL, reprendre les memes valeurs que dans `.env` :
 
-```text
-mot de passe brut : @monMotDePasse
-mot de passe URL  : %40monMotDePasse
+```bash
+export PREDICTION_DB_URL="postgresql+psycopg://home_credit:<VOTRE_MOT_DE_PASSE>@127.0.0.1:55432/home_credit_monitoring"
 ```
 
-Ne pas commiter de vraie cle API, de token Hugging Face ou de mot de passe de
-production dans Git.
+Si le mot de passe choisi contient malgre tout un caractere special d'URL,
+il doit etre encode manuellement dans cette commande (par exemple `@` devient
+`%40`) — une raison de plus de l'eviter.
+
+Ne pas commiter de vraie cle API, de token Hugging Face, de mot de passe de
+production ou de fichier `.env` dans Git.
 
 ## 5. Lancer l'API en local avec SQLite
 
@@ -222,14 +244,14 @@ Verifier PostgreSQL :
 
 ```bash
 docker compose exec postgres pg_isready \
-  -U maximebarbier \
+  -U home_credit \
   -d home_credit_monitoring
 ```
 
 Configurer l'API locale pour ecrire dans PostgreSQL :
 
 ```bash
-export PREDICTION_DB_URL="postgresql+psycopg://maximebarbier:<MOT_DE_PASSE_ENCODE>@127.0.0.1:55432/home_credit_monitoring"
+export PREDICTION_DB_URL="postgresql+psycopg://home_credit:<VOTRE_MOT_DE_PASSE>@127.0.0.1:55432/home_credit_monitoring"
 export HOME_CREDIT_API_KEY="demo-home-credit-key"
 poetry run uvicorn app.main:app --reload --port 8000
 ```
@@ -301,8 +323,8 @@ Server name: Home Credit Local
 Host name/address: 127.0.0.1
 Port: 55432
 Maintenance database: home_credit_monitoring
-Username: maximebarbier
-Password: mot de passe PostgreSQL configure dans docker-compose.yml
+Username: home_credit (ou la valeur de POSTGRES_USER dans .env)
+Password: valeur de POSTGRES_PASSWORD dans .env
 ```
 
 Dans pgAdmin, les tables attendues sont :
@@ -316,7 +338,7 @@ Verifier les volumes depuis le terminal :
 
 ```bash
 docker compose exec postgres psql \
-  -U maximebarbier \
+  -U home_credit \
   -d home_credit_monitoring \
   -c "SELECT 'api_call_logs' AS table_name, COUNT(*) FROM api_call_logs
       UNION ALL SELECT 'prediction_logs', COUNT(*) FROM prediction_logs
@@ -369,7 +391,7 @@ poetry run python scripts/export_production_logs.py
 Avec PostgreSQL local :
 
 ```bash
-export PREDICTION_DB_URL="postgresql+psycopg://maximebarbier:<MOT_DE_PASSE_ENCODE>@127.0.0.1:55432/home_credit_monitoring"
+export PREDICTION_DB_URL="postgresql+psycopg://home_credit:<VOTRE_MOT_DE_PASSE>@127.0.0.1:55432/home_credit_monitoring"
 poetry run python scripts/export_production_logs.py
 ```
 
@@ -441,7 +463,7 @@ poetry run streamlit run dashboard/monitoring_app.py
 Avec PostgreSQL local :
 
 ```bash
-export PREDICTION_DB_URL="postgresql+psycopg://maximebarbier:<MOT_DE_PASSE_ENCODE>@127.0.0.1:55432/home_credit_monitoring"
+export PREDICTION_DB_URL="postgresql+psycopg://home_credit:<VOTRE_MOT_DE_PASSE>@127.0.0.1:55432/home_credit_monitoring"
 poetry run streamlit run dashboard/monitoring_app.py
 ```
 
@@ -472,7 +494,7 @@ poetry run python scripts/analyze_api_performance.py
 Avec PostgreSQL local :
 
 ```bash
-export PREDICTION_DB_URL="postgresql+psycopg://maximebarbier:<MOT_DE_PASSE_ENCODE>@127.0.0.1:55432/home_credit_monitoring"
+export PREDICTION_DB_URL="postgresql+psycopg://home_credit:<VOTRE_MOT_DE_PASSE>@127.0.0.1:55432/home_credit_monitoring"
 poetry run python scripts/analyze_api_performance.py
 ```
 
@@ -497,6 +519,31 @@ Lecture du rapport :
   preprocessing ou l'inference ;
 - l'optimisation deja integree consiste a journaliser en tache de fond pour ne
   pas bloquer la reponse `/predict`.
+
+### Test d'optimisation ONNX Runtime
+
+Conversion reelle du pipeline champion (preprocessing scikit-learn +
+LightGBM) en ONNX, comparee au pipeline natif sur des lignes reelles de
+`train_features.parquet` (precision ET latence, pas seulement latence).
+
+Necessite le groupe Poetry optionnel `onnx-benchmark` (pas installe par
+defaut, absent de l'image Docker de production) :
+
+```bash
+poetry install --with onnx-benchmark
+poetry run python scripts/benchmark_onnx_inference.py
+```
+
+Sortie : `reports/YYYYMMDD_home_credit_performance/YYYYMMDD_HHMMSS_onnx_benchmark/`
+(`onnx_benchmark_report.md` + `champion_pipeline.onnx`).
+
+Resultat mesure (voir aussi `performance_report.md`, section "Optimisations
+et justification") : environ 5 a 6 fois plus rapide en latence unitaire, mais
+un ecart numerique sur `default_probability` fait basculer 0,4 a 1 % des
+decisions credit proches du seuil metier (0,2203) sur l'echantillon teste.
+ONNX est donc ecarte, avec une preuve chiffree plutot qu'un jugement a
+priori — c'est cette regression mesuree qui repond au point de vigilance de
+la consigne ("les optimisations ne doivent pas introduire de regressions").
 
 ## 14. Reconstruire les donnees
 
@@ -648,9 +695,79 @@ La CI GitHub execute :
 - test `/predict`.
 
 Le CD publie l'image dans GitHub Container Registry si la CI reussit sur
-`main`.
+`main`, puis declenche optionnellement un redeploiement Render (voir section
+18).
 
-## 18. Commandes de demonstration conseillees
+Point important : le CD ne se declenche **jamais** sur une pull request, sur
+`main` uniquement. `cd.yml` s'active via `workflow_run` avec un filtre
+`branches: [main]` : quand la CI tourne sur une PR, GitHub Actions rattache
+cette execution a la branche source de la PR, pas a `main`, donc le filtre ne
+matche pas. C'est volontaire — on ne deploie que du code deja merge, jamais le
+contenu d'une PR pas encore relue.
+
+Pour empecher un merge tant que la CI n'a pas reussi (facultatif) : GitHub ->
+Settings -> Branches -> regle sur `main` -> "Require status checks to pass
+before merging" -> cocher `lint-and-test` et `build-and-test-image`. `cd.yml`
+ne peut pas etre coche ici puisqu'il ne tourne jamais sur une PR.
+
+## 18. Deploiement sur Render
+
+L'API tourne en continu sur Render (tier gratuit), a partir du meme
+`Dockerfile` que celui teste par la CI. Render est connecte directement au
+depot GitHub et reconstruit l'image a chaque push sur `main` (independamment
+de `cd.yml`).
+
+URL publique :
+
+```text
+https://home-credit-mlops-api.onrender.com
+```
+
+Verifier que l'API est en ligne :
+
+```bash
+curl -s https://home-credit-mlops-api.onrender.com/health | python -m json.tool
+```
+
+Swagger en ligne :
+
+```text
+https://home-credit-mlops-api.onrender.com/docs
+```
+
+### Limites du tier gratuit
+
+- le service s'endort apres 15 minutes d'inactivite ; le premier appel apres
+  reveil prend 30 a 60 secondes ;
+- pas de disque persistant : la base SQLite de logs est reinitialisee a
+  chaque redemarrage du conteneur (normal, pas un bug) ;
+- avant une demonstration en direct, ouvrir `/health` quelques minutes a
+  l'avance pour reveiller le service.
+
+### Variables d'environnement configurees sur Render
+
+- `HOME_CREDIT_API_KEY` : recommande, protege `/predict` et
+  `/monitoring/summary` sur une API exposee publiquement ;
+- `HF_TOKEN` : non necessaire, le depot modele Hugging Face est public ;
+- `PREDICTION_DB_URL` : non defini, l'API utilise SQLite par defaut (pas de
+  PostgreSQL externe sur le tier gratuit).
+
+### Redeploiement automatique (Deploy Hook, facultatif)
+
+`cd.yml` peut declencher explicitement un redeploiement Render apres succes
+de la CI, en plus du declenchement automatique natif de Render sur push
+GitHub :
+
+1. Render -> service -> Settings -> Deploy Hook -> copier l'URL (a traiter
+   comme un secret, ne pas la coller en clair dans un chat ou un commit).
+2. GitHub -> Settings -> Secrets and variables -> Actions -> New repository
+   secret -> nom `RENDER_DEPLOY_HOOK_URL`, valeur = l'URL copiee.
+
+Sans ce secret, l'etape correspondante dans `cd.yml` est un no-op silencieux
+(voir le `if:` dans le fichier) ; Render redeploie quand meme via sa propre
+integration GitHub.
+
+## 19. Commandes de demonstration conseillees
 
 ### Demonstration API rapide
 
@@ -691,7 +808,7 @@ docker compose up -d --build
 docker compose ps
 
 docker compose exec postgres psql \
-  -U maximebarbier \
+  -U home_credit \
   -d home_credit_monitoring \
   -c "SELECT COUNT(*) FROM api_call_logs;"
 ```
@@ -707,7 +824,48 @@ poetry run python scripts/profile_api_performance.py \
 poetry run python scripts/analyze_api_performance.py
 ```
 
-## 19. Depannage rapide
+## 20. Depannage rapide
+
+### `error while interpolating ... required variable ... is missing a value`
+
+Cause : le fichier `.env` n'existe pas encore. `docker-compose.yml` lit
+`POSTGRES_DB`/`POSTGRES_USER`/`POSTGRES_PASSWORD` depuis ce fichier local.
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+### `failed to resolve host '<mot-de-passe>@postgres'`
+
+Cause : le mot de passe dans `.env` contient un `@` (ou un autre caractere
+special d'URL). `docker-compose.yml` construit `PREDICTION_DB_URL` en
+concatenant directement les variables sans encodage ; un `@` supplementaire
+dans le mot de passe casse le parsing de l'URL (le premier `@` rencontre est
+interprete comme le separateur identifiants/hote).
+
+Corriger `POSTGRES_PASSWORD` dans `.env` pour retirer tout caractere parmi
+`@ : / % espace`, puis :
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+### `password authentication failed for user ...`
+
+Cause : PostgreSQL a deja ete initialise une premiere fois avec un autre mot
+de passe, stocke dans le volume Docker `postgres_data`. Changer `.env` ne met
+pas a jour un PostgreSQL deja initialise — seul le conteneur `api` recupere
+la nouvelle valeur, pas le serveur PostgreSQL lui-meme.
+
+Repartir d'un volume propre (perd les donnees de demonstration locales,
+sans consequence) :
+
+```bash
+docker compose down -v
+docker compose up -d --build
+```
 
 ### 401 Unauthorized
 
@@ -781,7 +939,7 @@ Limiter le parallelisme :
 Eviter les gros runs complets avec SMOTE/ADASYN sur tout le dataset si la RAM
 est limitee.
 
-## 20. Checklist finale avant demonstration
+## 21. Checklist finale avant demonstration
 
 Verifier l'etat Git :
 
@@ -797,10 +955,17 @@ poetry run ruff check .
 poetry run pytest -q
 ```
 
-Verifier l'API :
+Verifier l'API locale :
 
 ```bash
 curl -s http://127.0.0.1:8000/health | python -m json.tool
+```
+
+Reveiller et verifier l'API en ligne sur Render (quelques minutes avant le
+passage, pour eviter le cold start devant le jury) :
+
+```bash
+curl -s https://home-credit-mlops-api.onrender.com/health | python -m json.tool
 ```
 
 Verifier les logs :
