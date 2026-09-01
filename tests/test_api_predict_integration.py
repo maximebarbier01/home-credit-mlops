@@ -9,8 +9,18 @@ import pandas as pd
 from fastapi.testclient import TestClient
 from mlflow.models import infer_signature
 
+from app.core.config import ApiConfig
 from app.main import create_app
 from home_credit_mlops.modeling.serving import CreditScoringModel
+
+
+def _disabled_logging_api_config() -> ApiConfig:
+    return ApiConfig(
+        api_key=None,
+        prediction_db_url=None,
+        prediction_logging_enabled=False,
+        api_call_logging_enabled=False,
+    )
 
 
 class TinyPipelineStub:
@@ -51,6 +61,7 @@ def test_predict_end_to_end_with_real_mlflow_model(tmp_path) -> None:
         prediction_repository=None,
         api_call_repository=None,
         init_prediction_storage=None,
+        api_config_loader=_disabled_logging_api_config,
     )
 
     with TestClient(app) as client:

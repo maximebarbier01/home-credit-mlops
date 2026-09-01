@@ -22,7 +22,7 @@ data/raw
 -> Hugging Face model repo
 -> API FastAPI (Docker)
 -> ci.yml (tests + build) -> cd.yml (push GitHub Container Registry)
--> Render (API publique) + PostgreSQL/SQLite (logs)
+-> Render (API publique) + PostgreSQL (logs, persistant)
 -> monitoring + Streamlit + rapports de performance
 ```
 
@@ -118,12 +118,20 @@ unset HOME_CREDIT_API_KEY
 
 ### 4.2 Base de logs
 
-`PREDICTION_DB_URL` indique ou stocker les logs API.
+`PREDICTION_DB_URL` indique ou stocker les logs API. Doit pointer vers un
+vrai PostgreSQL des que le logging est actif (par defaut) : pas de repli
+SQLite implicite (voir `app/core/config.py`). Sans elle, l'API refuse de
+demarrer avec un message explicite, plutot que d'ecrire silencieusement dans
+un fichier local ephemere qu'on oublie de sauvegarder ou qui disparait au
+redemarrage d'un conteneur sans disque persistant (le cas de Render, voir
+section 18).
 
-Sans `PREDICTION_DB_URL`, l'API utilise SQLite :
+Pour desactiver le logging (et donc l'exigence de base, utile pour un test
+tres rapide sans rien configurer) :
 
-```text
-artifacts/production_predictions.db
+```bash
+export PREDICTION_LOGGING_ENABLED=false
+export API_CALL_LOGGING_ENABLED=false
 ```
 
 #### Fichier `.env` (identifiants PostgreSQL)
@@ -162,16 +170,18 @@ il doit etre encode manuellement dans cette commande (par exemple `@` devient
 Ne pas commiter de vraie cle API, de token Hugging Face, de mot de passe de
 production ou de fichier `.env` dans Git.
 
-## 5. Lancer l'API en local avec SQLite
+## 5. Lancer l'API en local sans base de logs
 
-Ce mode est le plus simple pour verifier rapidement l'API. Il ne necessite pas
-PostgreSQL.
+Ce mode est le plus simple pour verifier rapidement l'API : logging
+desactive explicitement, aucune base de donnees necessaire (voir section
+4.2 — sans cela, l'API exigerait un PostgreSQL reel).
 
 Dans un premier terminal :
 
 ```bash
 cd /home/maxime/projects/home-credit-mlops
-unset PREDICTION_DB_URL
+export PREDICTION_LOGGING_ENABLED=false
+export API_CALL_LOGGING_ENABLED=false
 export HOME_CREDIT_API_KEY="demo-home-credit-key"
 poetry run uvicorn app.main:app --reload --port 8000
 ```
@@ -451,16 +461,9 @@ dashboard signale `insufficient_data`.
 
 ## 12. Lancer le dashboard Streamlit
 
-Le dashboard Streamlit lit la meme base SQLAlchemy que l'API.
-
-Avec SQLite :
-
-```bash
-unset PREDICTION_DB_URL
-poetry run streamlit run dashboard/monitoring_app.py
-```
-
-Avec PostgreSQL local :
+Le dashboard Streamlit lit la meme base SQLAlchemy que l'API (le champ
+"Base de logs SQLAlchemy" est vide par defaut si `PREDICTION_DB_URL` n'est
+pas exporte ; le renseigner directement dans l'interface fonctionne aussi).
 
 ```bash
 export PREDICTION_DB_URL="postgresql+psycopg://home_credit:<VOTRE_MOT_DE_PASSE>@127.0.0.1:55432/home_credit_monitoring"
@@ -739,18 +742,36 @@ https://home-credit-mlops-7dvw.onrender.com/docs
 
 - le service s'endort apres 15 minutes d'inactivite ; le premier appel apres
   reveil prend 30 a 60 secondes ;
-- pas de disque persistant : la base SQLite de logs est reinitialisee a
-  chaque redemarrage du conteneur (normal, pas un bug) ;
 - avant une demonstration en direct, ouvrir `/health` quelques minutes a
   l'avance pour reveiller le service.
+
+### Base de logs sur Render (PostgreSQL externe, pas SQLite)
+
+Render (tier gratuit) n'a pas de disque persistant : un SQLite local y
+serait reinitialise a chaque redemarrage du conteneur, effacant tout
+l'historique de monitoring/drift a chaque reveil. `PREDICTION_DB_URL`
+n'a plus de valeur par defaut SQLite (voir section 4.2) : l'API exige donc
+un PostgreSQL externe reellement persistant.
+
+Solution retenue : [Neon](https://neon.tech) (Postgres serverless gratuit,
+pas d'expiration, reveil automatique en cas d'inactivite — contrairement au
+Postgres gratuit de Render, qui expire, ou a Supabase, dont le projet se met
+en pause apres 7 jours et demande une reactivation manuelle).
+
+1. Creer un compte Neon, un projet, recuperer la chaine de connexion
+   (`postgresql://user:pass@ep-xxx.neon.tech/dbname?sslmode=require`).
+2. L'adapter au dialecte SQLAlchemy utilise par le projet (`+psycopg`) :
+   `postgresql+psycopg://user:pass@ep-xxx.neon.tech/dbname?sslmode=require`.
+3. Sur Render : Environment -> `PREDICTION_DB_URL` -> coller cette valeur ->
+   Save, rebuild, and deploy.
 
 ### Variables d'environnement configurees sur Render
 
 - `HOME_CREDIT_API_KEY` : recommande, protege `/predict` et
   `/monitoring/summary` sur une API exposee publiquement ;
 - `HF_TOKEN` : non necessaire, le depot modele Hugging Face est public ;
-- `PREDICTION_DB_URL` : non defini, l'API utilise SQLite par defaut (pas de
-  PostgreSQL externe sur le tier gratuit).
+- `PREDICTION_DB_URL` : obligatoire, chaine de connexion Neon (voir
+  ci-dessus).
 
 ### Redeploiement automatique (Deploy Hook, facultatif)
 
@@ -896,9 +917,11 @@ docker compose up -d postgres
 docker compose ps
 ```
 
-Ou revenir a SQLite :
+Ou desactiver le logging le temps de deboguer autre chose :
 
 ```bash
+export PREDICTION_LOGGING_ENABLED=false
+export API_CALL_LOGGING_ENABLED=false
 unset PREDICTION_DB_URL
 ```
 

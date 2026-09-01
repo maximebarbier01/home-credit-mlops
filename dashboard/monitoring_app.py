@@ -172,7 +172,12 @@ def _render_drift_tab(
 
 def main() -> None:
     settings = load_settings()
-    api_config = load_api_config()
+    try:
+        default_database_url = load_api_config().prediction_db_url or ""
+    except RuntimeError:
+        # PREDICTION_DB_URL absent : laisser le champ vide plutot que de
+        # planter le dashboard, l'utilisateur peut le renseigner a la main.
+        default_database_url = ""
 
     st.set_page_config(
         page_title="Home Credit Monitoring",
@@ -184,7 +189,7 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Configuration")
-        database_url = st.text_input("Base de logs SQLAlchemy", value=api_config.prediction_db_url)
+        database_url = st.text_input("Base de logs SQLAlchemy", value=default_database_url)
         reference_path = st.text_input(
             "Dataset de référence",
             value=settings.dataset.default_train_path.as_posix(),

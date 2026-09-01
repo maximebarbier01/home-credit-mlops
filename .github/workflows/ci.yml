@@ -47,6 +47,24 @@ jobs:
     # uniquement si ce job reussit sur main (voir workflow_run dans cd.yml).
     needs: lint-and-test
     runs-on: ubuntu-latest
+    # PREDICTION_DB_URL est desormais obligatoire des que le logging est
+    # actif (plus de repli SQLite silencieux, voir app/core/config.py) :
+    # un vrai PostgreSQL doit donc etre disponible ici aussi pour que le
+    # smoke test reflete fidelement l'environnement de production/Render.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: home_credit_ci
+          POSTGRES_USER: home_credit_ci
+          POSTGRES_PASSWORD: home_credit_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U home_credit_ci -d home_credit_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -68,7 +86,9 @@ jobs:
       - name: Run container (target environment)
         run: |
           docker run -d --name credit-api -p 8000:7860 \
+            --add-host=host.docker.internal:host-gateway \
             -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+            -e PREDICTION_DB_URL="postgresql+psycopg://home_credit_ci:home_credit_ci@host.docker.internal:5432/home_credit_ci" \
             home-credit-scoring-api:${{ github.sha }}
 
       - name: Wait for the API to become healthy
@@ -95,6 +115,19 @@ jobs:
           assert 'credit_decision' in body, body
           assert 'default_probability' in body, body
           print('Smoke test OK:', body)
+          "
+
+      - name: Confirm the prediction was actually logged to PostgreSQL
+        # /predict repond avant l'ecriture en base (tache de fond FastAPI,
+        # voir app/api/routes.py) : laisser une marge avant de verifier.
+        run: |
+          sleep 2
+          curl -sf http://localhost:8000/monitoring/summary | tee /tmp/summary.json
+          python3 -c "
+          import json
+          body = json.load(open('/tmp/summary.json'))
+          assert body.get('prediction_count', 0) >= 1, body
+          print('PostgreSQL logging OK:', body)
           "
 
       - name: Show container logs on failure

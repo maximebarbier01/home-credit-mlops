@@ -585,9 +585,13 @@ disponible.
 ## Monitoring production et data drift
 
 L'API journalise les données nécessaires au suivi de production dans une base
-SQLAlchemy. SQLite reste le mode local par défaut
-(`artifacts/production_predictions.db`), tandis que PostgreSQL est disponible
-pour une démo production-like via `docker-compose.yml`.
+SQLAlchemy PostgreSQL. `PREDICTION_DB_URL` n'a pas de valeur par défaut
+SQLite : dès que le logging est actif (par défaut), l'API refuse de démarrer
+sans une URL PostgreSQL explicite plutôt que d'écrire silencieusement dans un
+fichier local éphémère — un seul type de base, partout (local, Docker,
+Render), pas de logs perdus à chaque redémarrage d'un conteneur sans disque
+persistant. Pour désactiver le logging (et donc l'exigence de base), mettre
+`PREDICTION_LOGGING_ENABLED=false` et `API_CALL_LOGGING_ENABLED=false`.
 
 - `api_call_logs` : méthode HTTP, endpoint, statut, latence, payload JSON,
   type d'erreur, client et user-agent pour tous les appels, y compris les
@@ -621,20 +625,18 @@ explicables : PSI, KS test, variation de taux de valeurs manquantes. Si le
 volume de production est trop faible, le niveau de drift est marqué
 `insufficient_data` plutôt que sur-interprété.
 
-### Démo locale du monitoring avec SQLite
+### Démo locale du monitoring
 
-SQLite est le mode local le plus simple : aucune base externe n'est nécessaire.
-Si une variable `PREDICTION_DB_URL` PostgreSQL est encore présente dans le
-terminal, elle doit être retirée avant de démarrer l'API.
-
-1. Démarrer l'API :
+Démarrer PostgreSQL et l'API (voir la section suivante pour le détail des
+identifiants `.env`) :
 
 ```bash
-unset PREDICTION_DB_URL
+docker compose up -d postgres
+export PREDICTION_DB_URL="postgresql+psycopg://home_credit:<VOTRE_MOT_DE_PASSE>@127.0.0.1:55432/home_credit_monitoring"
 poetry run uvicorn app.main:app --reload --port 8000
 ```
 
-2. Simuler du trafic de production depuis `test_features.parquet` :
+1. Simuler du trafic de production depuis `test_features.parquet` :
 
 ```bash
 poetry run python scripts/simulate_production_requests.py \
@@ -642,19 +644,19 @@ poetry run python scripts/simulate_production_requests.py \
   --invalid-requests 3
 ```
 
-3. Consulter le résumé opérationnel exposé par l'API :
+2. Consulter le résumé opérationnel exposé par l'API :
 
 ```bash
 curl -s http://127.0.0.1:8000/monitoring/summary | python -m json.tool
 ```
 
-4. Exporter les logs bruts stockés en base :
+3. Exporter les logs bruts stockés en base :
 
 ```bash
 poetry run python scripts/export_production_logs.py
 ```
 
-5. Ouvrir le dashboard Streamlit :
+4. Ouvrir le dashboard Streamlit :
 
 ```bash
 poetry run streamlit run dashboard/monitoring_app.py

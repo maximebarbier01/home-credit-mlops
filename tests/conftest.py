@@ -67,6 +67,23 @@ def valid_payload() -> dict:
     }
 
 
+def _disabled_logging_api_config():
+    """ApiConfig de test : logging desactive, aucune base requise.
+
+    PREDICTION_DB_URL n'a plus de defaut SQLite implicite (voir
+    app/core/config.py) ; les tests qui n'exercent pas le logging
+    l'injectent explicitement plutot que de dependre de l'environnement.
+    """
+    from app.core.config import ApiConfig
+
+    return ApiConfig(
+        api_key=None,
+        prediction_db_url=None,
+        prediction_logging_enabled=False,
+        api_call_logging_enabled=False,
+    )
+
+
 @pytest.fixture
 def api_app(stub_model: StubScoringModel):
     """Construit une app FastAPI isolee avec un modele factice injecte (pas de reseau)."""
@@ -78,6 +95,7 @@ def api_app(stub_model: StubScoringModel):
         prediction_repository=None,
         api_call_repository=None,
         init_prediction_storage=None,
+        api_config_loader=_disabled_logging_api_config,
     )
 
 
@@ -106,6 +124,7 @@ def api_app_factory():
             prediction_repository=None,
             api_call_repository=None,
             init_prediction_storage=None,
+            api_config_loader=_disabled_logging_api_config,
         )
         client = TestClient(app)
         client.__enter__()
