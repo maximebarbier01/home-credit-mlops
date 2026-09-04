@@ -238,7 +238,12 @@ def _post_json(
     except HTTPError as exc:
         response_body = exc.read().decode("utf-8")
         status_code = exc.code
-    except URLError as exc:
+    except (URLError, TimeoutError) as exc:
+        # TimeoutError (ex. cold start Render) peut survenir pendant la
+        # lecture de la reponse, apres l'ouverture de la connexion : ce
+        # n'est pas toujours enveloppe dans URLError par urllib. Sans ce
+        # cas, une seule requete lente fait planter toute la simulation au
+        # lieu de compter cette requete comme un echec et continuer.
         return {
             "status_code": None,
             "latency_ms": (time.perf_counter() - started_at) * 1000,
