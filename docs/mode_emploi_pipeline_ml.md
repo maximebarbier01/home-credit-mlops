@@ -1205,6 +1205,13 @@ voulu (local ou Neon) selon la valeur de `PREDICTION_DB_URL` ; si elle est
 absente, le champ reste vide dans l'interface plutôt que de faire planter
 le dashboard (voir `dashboard/monitoring_app.py`).
 
+**Aucun lien HTTP entre Streamlit et l'API** : le dashboard interroge la
+base directement, indépendamment de l'API (locale ou Render) qui l'a
+remplie. Pour retrouver dans Streamlit le trafic envoyé vers l'API
+déployée sur Render, il faut donc exporter la même chaîne de connexion
+Neon avant de lancer `streamlit run` — sinon Streamlit continue de lire
+une autre base (locale, ou vide) et ne montre rien du trafic Render.
+
 ### 16.3 Métriques calculées
 
 Monitoring opérationnel :

@@ -65,7 +65,10 @@ Le projet contient plusieurs outils, mais chacun a un rôle distinct :
   pas l'API FastAPI actuelle.
 - **Streamlit** : dashboard local de monitoring situé dans
   `dashboard/monitoring_app.py`. Il lit les logs SQLAlchemy pour visualiser
-  latences, scores, décisions, erreurs et data drift.
+  latences, scores, décisions, erreurs et data drift. Pas de lien HTTP avec
+  l'API : c'est un second client direct de la base (`PREDICTION_DB_URL`),
+  indépendant de l'API qui l'a remplie. Pour voir le trafic envoyé à l'API
+  Render, exporter la même chaîne Neon avant de lancer Streamlit.
 - **Gradio** : non utilisé comme application dans ce dépôt. Il peut servir plus
   tard à construire une démo Hugging Face gratuite, mais aucune app Gradio Home
   Credit n'est actuellement implémentée.

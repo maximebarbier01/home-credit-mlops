@@ -500,12 +500,33 @@ dashboard signale `insufficient_data`.
 
 ## 12. Lancer le dashboard Streamlit
 
-Le dashboard Streamlit lit la meme base SQLAlchemy que l'API (le champ
-"Base de logs SQLAlchemy" est vide par defaut si `PREDICTION_DB_URL` n'est
-pas exporte ; le renseigner directement dans l'interface fonctionne aussi).
+**Streamlit n'est jamais connecte a l'API** (ni locale, ni Render) : il n'y
+a aucun appel HTTP entre les deux. Le dashboard lit **directement la base
+de donnees** via SQLAlchemy (`PREDICTION_DB_URL`), exactement comme l'API
+le fait de son cote, mais independamment — c'est un second client de la
+meme base, pas un client de l'API.
+
+Consequence concrete : pour voir dans Streamlit le trafic envoye vers
+**Render** (donc stocke dans Neon), il faut lancer Streamlit avec la
+**meme chaine de connexion Neon** que celle configuree sur Render, pas
+avec un PostgreSQL local. Le champ "Base de logs SQLAlchemy" dans la barre
+laterale est vide par defaut si `PREDICTION_DB_URL` n'est pas exporte
+avant de lancer la commande ; le renseigner directement dans l'interface
+deja ouverte fonctionne aussi, mais ne se met pas a jour tout seul si vous
+changez de cible — il faut relancer Streamlit ou modifier ce champ a la
+main.
+
+Base locale (Docker Compose) :
 
 ```bash
 export PREDICTION_DB_URL="postgresql+psycopg://home_credit:<VOTRE_MOT_DE_PASSE>@127.0.0.1:55432/home_credit_monitoring"
+poetry run streamlit run dashboard/monitoring_app.py
+```
+
+Base Neon (donnees envoyees vers l'API Render) :
+
+```bash
+export PREDICTION_DB_URL="<votre chaine de connexion Neon>"
 poetry run streamlit run dashboard/monitoring_app.py
 ```
 
