@@ -860,17 +860,23 @@ faire fuiter des routes enregistrées dynamiquement d'un test à l'autre.
 `app = create_app()` reste disponible au niveau module pour la convention
 uvicorn (`module:app`).
 
-Par défaut, les prédictions sont journalisées dans une base SQLite
-`artifacts/production_predictions.db`, via SQLAlchemy. Pour une démo
-production-like, la même couche SQLAlchemy peut écrire dans PostgreSQL via
-`PREDICTION_DB_URL=postgresql+psycopg://...`. Cette journalisation est
-volontairement non bloquante : si l'écriture échoue, la prédiction est quand
-même retournée. Deux variables d'environnement permettent d'adapter ce
-comportement :
+Les prédictions sont journalisées via SQLAlchemy dans une base PostgreSQL
+(`PREDICTION_DB_URL=postgresql+psycopg://...`) — local via
+[`docker-compose.yml`](../docker-compose.yml), ou Neon (Postgres serverless
+géré) pour l'instance déployée sur Render. `PREDICTION_DB_URL` n'a plus de
+valeur par défaut SQLite (voir `app/core/config.py`) : dès que le logging
+est actif (par défaut), l'API refuse de démarrer sans une URL explicite,
+plutôt que d'écrire silencieusement dans un fichier local éphémère qui
+disparaîtrait à chaque redémarrage d'un conteneur sans disque persistant —
+c'est exactement le bug que ce choix corrige (Render, tier gratuit, n'a pas
+de disque persistant). Cette journalisation reste volontairement non
+bloquante : si l'écriture échoue, la prédiction est quand même retournée.
+Deux variables d'environnement permettent d'adapter ce comportement :
 
-- `PREDICTION_LOGGING_ENABLED=false` pour désactiver la persistance ;
-- `PREDICTION_DB_URL=sqlite:////chemin/vers/prod.db` ou
-  `PREDICTION_DB_URL=postgresql+psycopg://...` pour changer de base.
+- `PREDICTION_LOGGING_ENABLED=false` et `API_CALL_LOGGING_ENABLED=false`
+  pour désactiver la persistance (et donc l'exigence de base) ;
+- `PREDICTION_DB_URL=postgresql+psycopg://...` pour pointer vers l'instance
+  PostgreSQL voulue (locale, Docker Compose, ou Neon).
 
 `HOME_CREDIT_API_KEY` active une protection simple par header `X-API-Key`.
 Si cette variable n'est pas définie, l'API reste ouverte pour les tests et
@@ -901,8 +907,9 @@ sont deux décisions distinctes.
 (aligné sur la version Python qui a servi à sérialiser le modèle
 enregistré), n'installe que les groupes Poetry `main` et `api`
 (`poetry install --only main,api`), utilisateur non-root, port `7860`
-(convention Hugging Face Spaces SDK Docker, conservée même si le
-déploiement effectif ne cible plus Spaces — voir 15.6). Le modèle n'est
+(convention Hugging Face Spaces SDK Docker à l'origine ; conservée car
+Render détecte aussi automatiquement le port exposé via `EXPOSE` — voir
+15.6). Le modèle n'est
 **pas** embarqué dans l'image — il est téléchargé au démarrage du
 conteneur, ce qui permet de promouvoir un nouveau champion sans
 reconstruire l'image.
@@ -995,16 +1002,45 @@ avec une erreur `402 Payment Required` — l'hébergement Docker/Gradio sur le
 tier gratuit "cpu-basic" de Hugging Face nécessite désormais un abonnement
 PRO. `scripts/export_model_for_serving.py` et la publication sur Hugging
 Face **Hub** (15.4, différent de Spaces) restent inchangés : c'est
-uniquement l'hébergement de l'API elle-même qui n'est pas déployé sur une
-plateforme externe payante.
+uniquement l'hébergement de l'API elle-même qui a dû trouver une autre
+plateforme (Render, ci-dessous), gratuite elle aussi.
 
 **Distinction à ne pas confondre** : `ci.yml` (build + smoke test, conteneur
 détruit ensuite) est un test d'intégration, pas un déploiement — rien ne
 persiste après. Le "D" du CD vit entièrement dans `cd.yml` : c'est le push
 vers `ghcr.io` qui laisse un artefact versionné et récupérable après chaque
-pipeline réussi. Ce n'est toujours pas un service qui tourne en continu
-quelque part (ça demanderait un hébergeur payant) — juste la partie
-"build → test → publie" du cycle, gratuite et automatisée.
+pipeline réussi.
+
+### 15.6bis Déploiement réel sur Render
+
+Contrairement à Hugging Face Spaces, Render propose un déploiement Docker
+gratuit sans exiger d'abonnement payant. Le service (`home-credit-mlops-api`,
+<https://home-credit-mlops-api.onrender.com>) est connecté directement au
+dépôt GitHub (accès accordé via l'app GitHub de Render — pas juste une
+autorisation OAuth de compte, une vraie installation avec sélection du
+dépôt, sans quoi le clone échoue au déploiement) et reconstruit l'image à
+chaque push sur `main`, indépendamment de `ghcr.io`/`cd.yml`.
+
+Base de logs de production : PostgreSQL géré par **Neon** (serverless —
+stockage et calcul séparés, réveil automatique après inactivité, sans la
+réactivation manuelle qu'imposerait un projet Supabase mis en pause). C'est
+la même techno et le même code que le PostgreSQL local de
+`docker-compose.yml`, seule la chaîne `PREDICTION_DB_URL` change ; c'est
+précisément ce que permet l'absence de valeur par défaut SQLite (15.3) :
+un seul chemin de code, quel que soit l'environnement.
+
+Limites assumées du tier gratuit : le service s'endort après 15 minutes
+d'inactivité (premier appel après réveil : 30 à 60 secondes) ; pas de
+disque persistant côté conteneur applicatif, d'où le choix de Neon plutôt
+qu'un SQLite local pour ne pas perdre l'historique de monitoring à chaque
+redémarrage.
+
+Le pipeline complet est donc, de bout en bout : `ci.yml` (tests + build +
+smoke test réel) → `cd.yml` (push `ghcr.io` si succès sur `main`) → Render
+(redéploiement automatique depuis GitHub, indépendant de `ghcr.io`). Un
+appel optionnel à un Deploy Hook Render peut aussi être déclenché depuis
+`cd.yml` (secret `RENDER_DEPLOY_HOOK_URL`) pour ne redéployer qu'après
+succès explicite de la CI plutôt que sur chaque push brut.
 
 ### 15.7 Tests
 
@@ -1033,11 +1069,11 @@ détecter des dérives de données et des problèmes opérationnels.
 
 ### 16.1 Stockage des logs de production
 
-La base de production simulée est une base SQLite locale par défaut :
-`artifacts/production_predictions.db`. Le chemin peut être remplacé par une
-autre URL SQLAlchemy via `PREDICTION_DB_URL`. Pour se rapprocher d'une
-production réelle, le projet fournit un PostgreSQL local dans
-[`docker-compose.yml`](../docker-compose.yml).
+La base de production est PostgreSQL, sans exception : `PREDICTION_DB_URL`
+n'a pas de valeur par défaut SQLite (voir 15.3) — locale via
+[`docker-compose.yml`](../docker-compose.yml) pour le développement, Neon
+pour l'instance déployée sur Render (voir 15.6bis). Un seul type de base,
+peu importe l'environnement.
 
 Quatre tables sont créées par SQLAlchemy :
 
@@ -1139,7 +1175,7 @@ curl -s http://127.0.0.1:8000/monitoring/summary | python -m json.tool
 ```
 
 Ce endpoint retourne les volumes, taux d'erreur, latences, compte de
-prédictions et distribution des décisions sans ouvrir SQLite.
+prédictions et distribution des décisions sans requêter directement la base.
 
 Dashboard local :
 
@@ -1148,8 +1184,10 @@ poetry run streamlit run dashboard/monitoring_app.py
 ```
 
 Le dashboard Streamlit lit la même base SQLAlchemy et propose quatre onglets :
-opérations, scores, data drift et logs bruts. Il peut donc pointer vers SQLite
-ou PostgreSQL selon la valeur de `PREDICTION_DB_URL`.
+opérations, scores, data drift et logs bruts. Il pointe vers le PostgreSQL
+voulu (local ou Neon) selon la valeur de `PREDICTION_DB_URL` ; si elle est
+absente, le champ reste vide dans l'interface plutôt que de faire planter
+le dashboard (voir `dashboard/monitoring_app.py`).
 
 ### 16.3 Métriques calculées
 
@@ -1186,10 +1224,20 @@ nécessaire : minimisation des données, durée de rétention, chiffrement,
 pseudonymisation des identifiants client, contrôle d'accès à la base et aux
 exports.
 
-SQLite est suffisant pour un PoC local. PostgreSQL est désormais disponible
-pour démontrer la persistance et la traçabilité multi-tables. Pour une
-production réelle, il resterait à ajouter une politique de rétention, des
-sauvegardes, une gestion fine des accès et une revue RGPD.
+PostgreSQL (local ou Neon) démontre la persistance et la traçabilité
+multi-tables de bout en bout, y compris en production réelle sur Render.
+Pour une production réelle au sens strict, il resterait à ajouter une
+politique de rétention, des sauvegardes, une gestion fine des accès et une
+revue RGPD.
+
+Un incident réel de sécurité, corrigé pendant le projet, illustre
+concrètement l'enjeu de "contrôle d'accès à la base" : le mot de passe
+PostgreSQL de démo s'est retrouvé un temps en clair dans un commit poussé
+sur le dépôt GitHub public (`docker-compose.yml` le codait en dur). Corrigé
+en le faisant lire depuis un fichier `.env` local non versionné (voir
+`.env.example`) — un exemple concret, pas seulement théorique, de pourquoi
+la vigilance sur les secrets fait partie intégrante de la solution de
+stockage, pas un à-côté.
 
 ## 17. Phase 12 : analyse et optimisation des performances post-déploiement
 
@@ -1222,11 +1270,22 @@ Trois choix ont été intégrés dans l'API :
   sont déjà persistés dans `production_inputs`. Les payloads invalides restent
   conservés dans `api_call_logs` pour expliquer les erreurs `422`.
 
-ONNX Runtime et GPU ont été analysés mais non retenus à ce stade. Le modèle
-champion est un modèle tabulaire LightGBM avec un preprocessing Python/MLflow :
-la conversion ONNX augmenterait le risque de divergence entre entraînement et
-serving, tandis que le GPU n'apporte pas de gain évident pour une inférence
-unitaire de scoring crédit.
+**ONNX Runtime a été réellement testé**, pas seulement discuté sur le
+papier : conversion effective du pipeline champion (preprocessing
+scikit-learn + LightGBM) via `scripts/benchmark_onnx_inference.py`,
+comparé au pipeline natif sur des lignes réelles de
+`train_features.parquet` (précision ET latence, groupe Poetry optionnel
+`onnx-benchmark`, absent de l'image Docker de production). Résultat mesuré :
+environ 5 à 6 fois plus rapide en latence unitaire, mais un écart numérique
+sur `default_probability` fait basculer 0,4 à 1 % des décisions crédit
+proches du seuil métier (0,2203) sur l'échantillon testé. ONNX est donc
+écarté **avec preuve chiffrée d'une régression fonctionnelle réelle**,
+répondant directement au point de vigilance de la consigne ("les
+optimisations ne doivent pas introduire de régressions") — pas par
+hypothèse a priori. Le GPU reste écarté sur une base plus qualitative :
+LightGBM en inférence tabulaire est adapté au CPU, un GPU ajouterait de la
+complexité de déploiement pour un gain incertain sur des requêtes
+unitaires.
 
 ### 17.3 Commandes de démonstration
 
@@ -1245,10 +1304,11 @@ poetry run python scripts/simulate_production_requests.py \
   --invalid-requests 3
 ```
 
-Pointer les scripts d'analyse vers PostgreSQL :
+Pointer les scripts d'analyse vers PostgreSQL (valeur définie dans `.env`,
+voir `.env.example`) :
 
 ```bash
-export PREDICTION_DB_URL="postgresql+psycopg://home_credit:home_credit@127.0.0.1:55432/home_credit_monitoring"
+export PREDICTION_DB_URL="postgresql+psycopg://home_credit:<VOTRE_MOT_DE_PASSE>@127.0.0.1:55432/home_credit_monitoring"
 ```
 
 Profiler l'API :
@@ -1257,6 +1317,13 @@ Profiler l'API :
 poetry run python scripts/profile_api_performance.py \
   --sample-size 50 \
   --warmup-requests 5
+```
+
+Tester la conversion ONNX (précision + latence, groupe Poetry optionnel) :
+
+```bash
+poetry install --with onnx-benchmark
+poetry run python scripts/benchmark_onnx_inference.py
 ```
 
 Générer le rapport de performance :
@@ -1276,6 +1343,11 @@ Les sorties sont créées dans
   d'étranglement et décisions d'optimisation ;
 - `performance_report.md` : rapport textuel détaillant les tests, résultats,
   limites et configuration finale.
+
+`scripts/benchmark_onnx_inference.py` produit séparément
+`reports/YYYYMMDD_home_credit_performance/YYYYMMDD_HHMMSS_onnx_benchmark/`
+(`onnx_benchmark_report.md` avec les chiffres précision/latence natif vs
+ONNX, `champion_pipeline.onnx` le graphe converti).
 
 ### 17.5 Lecture attendue des résultats
 
@@ -1446,6 +1518,7 @@ Une présentation synthétique peut suivre cette narration :
 - Le sampling doit rester à l'intérieur de la validation croisée.
 - Les résultats supérieurs aux références Kaggle doivent déclencher un audit de fuite de données.
 - Le tracking local n'apporte ni haute disponibilité ni collaboration distante.
-- La surveillance de dérive (data drift) en production reste un prolongement possible, non implémenté.
-- L'API FastAPI + Docker (section 15) est vérifiée bout-en-bout (build, démarrage réel du conteneur, chargement du vrai modèle, requête HTTP), y compris dans le pipeline CI/CD via un déploiement simulé dans le runner GitHub Actions. Le déploiement réel sur une plateforme externe (Hugging Face Spaces envisagé initialement) nécessite un abonnement PRO (tier gratuit "cpu-basic" non éligible au SDK Docker) — hors périmètre de ce projet pédagogique. Le modèle reste publié publiquement sur Hugging Face Hub (`scripts/export_model_for_serving.py`), seule l'hébergement de l'API n'est pas déployé en externe.
+- La surveillance de dérive (data drift) en production est implémentée (section 16) : PSI, KS test, variation du taux de valeurs manquantes, comparés à la vraie référence d'entraînement, avec un statut `insufficient_data` si le volume est trop faible pour être interprété.
+- L'API FastAPI + Docker (section 15) est vérifiée bout-en-bout (build, démarrage réel du conteneur, chargement du vrai modèle, requête HTTP), y compris dans le pipeline CI/CD, **et déployée réellement en continu sur Render** (15.6bis), pas seulement testée dans le runner GitHub Actions. Hugging Face Spaces (plan initial) nécessite un abonnement PRO pour l'hébergement Docker (erreur `402` constatée) — Render comble ce rôle gratuitement. Le modèle reste publié publiquement sur Hugging Face Hub (`scripts/export_model_for_serving.py`), séparé de l'hébergement de l'API.
+- L'optimisation ONNX Runtime (section 17.2) a été testée réellement (pas seulement discutée) et rejetée avec une preuve chiffrée de régression fonctionnelle, pas par hypothèse a priori.
 - L'analyse de fairness (section 14) remonte des écarts significatifs par genre et par tranche d'âge sur le champion actuel, non encore traités (recalibration par groupe, revue des features corrélées à l'âge) : à considérer avant tout usage réel.

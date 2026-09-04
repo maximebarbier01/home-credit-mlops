@@ -571,16 +571,28 @@ suivants oui.
 
 **Pourquoi pas un déploiement réel sur Hugging Face Spaces ?** Testé, mais
 l'hébergement Docker sur le tier gratuit "cpu-basic" de Hugging Face
-nécessite désormais un abonnement PRO (erreur 402 constatée en pratique) —
-hors périmètre de ce projet pédagogique.
+nécessite désormais un abonnement PRO (erreur 402 constatée en pratique).
 
-**Pourquoi `ghcr.io` plutôt qu'un service qui tourne en continu ?** Publier
-un service réellement accessible en permanence demanderait un hébergeur
-payant (comme HF Spaces PRO). `ghcr.io` reste gratuit et donne un vrai
-artefact versionné et récupérable après chaque pipeline réussi — c'est
-la partie "build → test → **publie**" du CD ; faire tourner ce conteneur
-en continu quelque part resterait la suite logique si un hébergement était
-disponible.
+### Déploiement continu sur Render
+
+`ghcr.io` publie l'image versionnée à chaque pipeline réussi, mais ne fait
+tourner aucun service en continu. C'est **Render** (tier gratuit) qui joue
+ce rôle : <https://home-credit-mlops-api.onrender.com>, connecté
+directement au dépôt GitHub, reconstruit l'image à chaque push sur `main`
+indépendamment de `ghcr.io`.
+
+```bash
+curl -s https://home-credit-mlops-api.onrender.com/health | python -m json.tool
+```
+
+Limites assumées du tier gratuit : le service s'endort après 15 minutes
+d'inactivité (premier appel après réveil : 30 à 60 secondes), et n'a pas de
+disque persistant — la base de logs de production est donc PostgreSQL géré
+par [Neon](https://neon.tech) (serverless, réveil automatique, sans la
+réactivation manuelle qu'imposerait un projet Supabase mis en pause), pas
+un SQLite local qui serait réinitialisé à chaque redémarrage. Voir
+`docs/guide_utilisation_complet.md` section 18 pour la configuration
+complète (variables d'environnement Render, Deploy Hook optionnel).
 
 ## Monitoring production et data drift
 

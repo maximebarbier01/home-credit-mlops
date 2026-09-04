@@ -723,19 +723,19 @@ de `cd.yml`).
 URL publique :
 
 ```text
-https://home-credit-mlops-7dvw.onrender.com
+https://home-credit-mlops-api.onrender.com
 ```
 
 Verifier que l'API est en ligne :
 
 ```bash
-curl -s https://home-credit-mlops-7dvw.onrender.com/health | python -m json.tool
+curl -s https://home-credit-mlops-api.onrender.com/health | python -m json.tool
 ```
 
 Swagger en ligne :
 
 ```text
-https://home-credit-mlops-7dvw.onrender.com/docs
+https://home-credit-mlops-api.onrender.com/docs
 ```
 
 ### Limites du tier gratuit
@@ -846,6 +846,27 @@ poetry run python scripts/analyze_api_performance.py
 ```
 
 ## 20. Depannage rapide
+
+### Render : `fatal: could not read Username for 'https://github.com/': terminal prompts disabled`
+
+Cause : l'app GitHub de Render a perdu l'acces au depot (desinstallee ou
+jamais correctement configuree) — Render tente un clone anonyme et echoue.
+Verifier `github.com/settings/installations` : si "Render" n'y figure pas
+(une simple autorisation OAuth sous "Authorized GitHub Apps" ne suffit pas),
+la reconnecter depuis Render : Account Settings -> Account Security -> Git
+Deployment Credentials -> `...` sur l'entree GitHub -> reconfigurer les
+depots autorises. "No repositories found" sous Git Deployment Credentials
+est le symptome exact de cette perte d'acces.
+
+### Render : PREDICTION_DB_URL semble configuree mais l'API dit qu'elle est absente
+
+Cause probable : la valeur a ete ajoutee dans la section **Secret Files**
+de Render (qui cree un vrai fichier sur disque, `/etc/secrets/<nom>`) au
+lieu de la section **Environment Variables** (qui definit une vraie
+variable d'environnement). Notre code lit `os.environ`, pas un fichier —
+un Secret File nomme `PREDICTION_DB_URL` n'est jamais vu par l'application.
+Supprimer le Secret File, ajouter la meme valeur dans Environment
+Variables, puis Save/redeploy.
 
 ### `error while interpolating ... required variable ... is missing a value`
 
@@ -988,7 +1009,7 @@ Reveiller et verifier l'API en ligne sur Render (quelques minutes avant le
 passage, pour eviter le cold start devant le jury) :
 
 ```bash
-curl -s https://home-credit-mlops-7dvw.onrender.com/health | python -m json.tool
+curl -s https://home-credit-mlops-api.onrender.com/health | python -m json.tool
 ```
 
 Verifier les logs :
