@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--database-url",
         default=None,
-        help="URL SQLAlchemy de la base de logs. Défaut : PREDICTION_DB_URL ou SQLite local.",
+        help="URL SQLAlchemy de la base de logs (PostgreSQL). Défaut : PREDICTION_DB_URL (obligatoire, aucun repli SQLite).",
     )
     parser.add_argument(
         "--reference-data",
