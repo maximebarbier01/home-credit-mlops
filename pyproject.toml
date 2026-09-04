@@ -34,6 +34,7 @@ pytest = "^8.4.0"
 ruff = "^0.12.0"
 ipykernel = "^7.3.0"
 httpx2 = "^2.10.0"
+pytest-cov = "^7.1.0"
 
 [tool.poetry.group.reporting.dependencies]
 matplotlib = ">=3.9,<4.0"
@@ -62,6 +63,15 @@ onnxmltools = "^1.16.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+# app/ = API de production, src/home_credit_mlops/ = logique ML reutilisable.
+# Exclut deliberement les notebooks/scripts d'entree (executes manuellement,
+# valides par inspection des rapports generes, pas par pytest).
+source = ["app", "src/home_credit_mlops"]
+
+[tool.coverage.report]
+skip_empty = true
 
 [tool.ruff]
 line-length = 100

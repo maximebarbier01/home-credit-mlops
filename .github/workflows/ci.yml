@@ -35,8 +35,8 @@ jobs:
       - name: Lint (ruff)
         run: poetry run ruff check app dashboard scripts src tests
 
-      - name: Tests (pytest)
-        run: poetry run pytest -q
+      - name: Tests (pytest) avec couverture
+        run: poetry run pytest -q --cov --cov-report=term
 
   build-and-test-image:
     # Partie CI : construit l'image et la teste reellement (conteneur

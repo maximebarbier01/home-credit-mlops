@@ -748,14 +748,47 @@ poetry run pytest -q
 poetry check
 ```
 
+### Couverture de tests
+
+```bash
+poetry run pytest --cov --cov-report=term
+```
+
+`[tool.coverage.run]` (dans `pyproject.toml`) limite la mesure a `app/` et
+`src/home_credit_mlops/` — pas les scripts d'entree (`scripts/`), executes
+manuellement et valides par inspection des rapports qu'ils generent, pas
+par pytest.
+
+Chiffre global : **62 %** (99 tests). Tres inegal selon les zones, et c'est
+attendu :
+
+- `app/` (API de production) : **82 a 100 %** par fichier — c'est la partie
+  qui compte le plus pour la robustesse en production, et elle est bien
+  couverte.
+- `src/home_credit_mlops/fairness/`, `modeling/serving.py`,
+  `monitoring/`, `performance/`, `settings.py` : **87 a 100 %**.
+- `src/home_credit_mlops/eda/`, `data/home_credit.py`,
+  `modeling/benchmark.py`, `mlflow_utils.py` : **9 a 45 %** — normal, ce
+  sont des scripts de pipeline (EDA, entrainement, feature engineering)
+  executes une fois par campagne et valides par les rapports qu'ils
+  produisent (Excel, PNG, HTML), pas par des tests unitaires ligne a
+  ligne. Les tester exhaustivement demanderait de dupliquer la logique
+  metier en assertions, pour peu de valeur ajoutee sur un projet de cette
+  taille.
+
+Mesuree en CI a chaque run (`ci.yml`, job `lint-and-test`), affichee dans
+les logs — pas un gate bloquant, juste une mesure reproductible et
+verifiable a tout moment plutot qu'une affirmation non verifiee.
+
 La CI GitHub execute :
 
 - lint avec Ruff ;
-- tests Pytest ;
+- tests Pytest, avec couverture ;
 - build de l'image Docker ;
 - lancement reel du conteneur dans le runner ;
 - test `/health` ;
-- test `/predict`.
+- test `/predict` ;
+- test que la prediction est bien journalisee dans PostgreSQL.
 
 Le CD publie l'image dans GitHub Container Registry si la CI reussit sur
 `main`, puis declenche optionnellement un redeploiement Render (voir section
