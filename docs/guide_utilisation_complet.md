@@ -358,10 +358,49 @@ docker compose exec postgres psql \
 
 ## 9. Simuler du trafic de production
 
-Le script lit `data/processed/test_features.parquet`, retire les colonnes non
-attendues et envoie des clients vers `/predict`.
+Le script lit `data/processed/test_features.parquet` (le vrai jeu de test
+Kaggle, jamais vu a l'entrainement), nettoie les valeurs pour rester
+compatible avec les validateurs metier de l'API (age, revenus, bornes
+EXT_SOURCE...), retire les colonnes non attendues (`SK_ID_CURR`, `TARGET`),
+puis envoie chaque ligne comme une vraie requete HTTP `POST /predict`,
+une par une. `--invalid-requests N` ajoute N copies des premiers payloads
+valides avec `AMT_INCOME_TOTAL` retire, pour declencher volontairement des
+`422` et tester le chemin de journalisation des erreurs — ce sont des
+requetes **en plus** de `--sample-size`, pas une partie de ce nombre.
 
-Avec API key en variable d'environnement :
+Deux pieges frequents :
+
+- **`python` est obligatoire** entre `poetry run` et le chemin du script.
+  `poetry run scripts/simulate_production_requests.py` (sans `python`)
+  echoue avec `Permission denied` : Poetry essaie d'executer le fichier
+  directement au lieu de l'interpreter.
+- **`--api-key` attend la vraie valeur de la cle**, pas le nom de la
+  variable d'environnement. `--api-key "HOME_CREDIT_API_KEY"` envoie
+  litteralement le texte `HOME_CREDIT_API_KEY` comme cle (401 garanti) —
+  soit remplacer par la vraie cle, soit omettre `--api-key` et exporter
+  `HOME_CREDIT_API_KEY` (le script la recupere automatiquement).
+
+**Vers quelle API va le trafic ?** Par defaut, `--api-url` vaut
+`http://127.0.0.1:8000/predict` — une API locale doit deja tourner
+(`poetry run uvicorn app.main:app --port 8000`) sinon chaque requete
+echoue avec une erreur de connexion. Les logs atterrissent alors dans le
+`PREDICTION_DB_URL` de **cette API locale** (Postgres local, ou Neon si
+vous l'avez exporte avant de lancer `uvicorn`) — le script simulateur n'a
+lui-meme aucune idee d'ou vont les donnees, c'est l'API qui recoit la
+requete qui decide.
+
+Pour tester contre l'API en ligne (et donc ecrire directement dans Neon,
+sans rien lancer en local) :
+
+```bash
+poetry run python scripts/simulate_production_requests.py \
+  --sample-size 100 \
+  --invalid-requests 3 \
+  --api-url https://home-credit-mlops-api.onrender.com/predict \
+  --api-key "<votre cle reelle>"
+```
+
+Avec API key en variable d'environnement (cible locale, API deja lancee) :
 
 ```bash
 export HOME_CREDIT_API_KEY="demo-home-credit-key"

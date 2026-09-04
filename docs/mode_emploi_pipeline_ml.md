@@ -1154,9 +1154,25 @@ poetry run python scripts/simulate_production_requests.py \
 
 `scripts/simulate_production_requests.py` lit `data/processed/test_features.parquet`,
 retire les colonnes non attendues par le modèle (`SK_ID_CURR`, `TARGET`), puis
-envoie les clients vers `/predict`. L'option `--invalid-requests` ajoute
-quelques payloads volontairement invalides afin de tester la journalisation des
-erreurs `422`.
+envoie les clients vers `/predict`, une vraie requête HTTP à la fois.
+L'option `--invalid-requests N` ajoute N payloads volontairement invalides
+(copies des premiers, avec `AMT_INCOME_TOTAL` retiré) afin de tester la
+journalisation des erreurs `422` — en plus de `--sample-size`, pas dedans.
+
+`--api-url` (défaut `http://127.0.0.1:8000/predict`) détermine où va le
+trafic, donc où les logs atterrissent : le script ne fait qu'appeler l'API
+comme n'importe quel client, c'est l'API qui reçoit la requête qui décide
+via son propre `PREDICTION_DB_URL` (Postgres local, ou Neon si l'API ciblée
+est celle déployée sur Render). Sans `--api-url` explicite, une API locale
+doit déjà tourner, sinon chaque requête échoue en erreur de connexion.
+
+`--api-key` attend la **valeur réelle** de la clé, pas le nom de la
+variable d'environnement (`--api-key "HOME_CREDIT_API_KEY"` envoie
+littéralement ce texte comme clé → `401` garanti). Omettre `--api-key` et
+exporter `HOME_CREDIT_API_KEY` fonctionne aussi, le script la lit
+automatiquement. Attention également à ne pas oublier `python` entre
+`poetry run` et le chemin du script (`poetry run scripts/...py` échoue
+avec `Permission denied`, Poetry tente d'exécuter le fichier directement).
 
 Un export brut des logs stockés est également disponible :
 
