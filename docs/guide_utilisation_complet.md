@@ -363,7 +363,13 @@ Kaggle, jamais vu a l'entrainement), nettoie les valeurs pour rester
 compatible avec les validateurs metier de l'API (age, revenus, bornes
 EXT_SOURCE...), retire les colonnes non attendues (`SK_ID_CURR`, `TARGET`),
 puis envoie chaque ligne comme une vraie requete HTTP `POST /predict`,
-une par une. `--invalid-requests N` ajoute N copies des premiers payloads
+une par une. Les valeurs manquantes ne sont remplies que pour les colonnes
+**requises** par le schema MLflow (lu via `Model.load()`, sans charger le
+pickle complet) : les colonnes optionnelles (souvent celles avec le plus de
+vrais NaN a l'entrainement, ex. agregats `CC_*`/`BURO_*`) gardent leur
+valeur manquante telle quelle, pour que l'analyse de derive reflete de
+vrais patterns de missingness plutot qu'un artefact de nettoyage trop
+agressif. `--invalid-requests N` ajoute N copies des premiers payloads
 valides avec `AMT_INCOME_TOTAL` retire, pour declencher volontairement des
 `422` et tester le chemin de journalisation des erreurs — ce sont des
 requetes **en plus** de `--sample-size`, pas une partie de ce nombre.

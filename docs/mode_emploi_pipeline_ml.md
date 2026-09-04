@@ -1154,7 +1154,12 @@ poetry run python scripts/simulate_production_requests.py \
 
 `scripts/simulate_production_requests.py` lit `data/processed/test_features.parquet`,
 retire les colonnes non attendues par le modèle (`SK_ID_CURR`, `TARGET`), puis
-envoie les clients vers `/predict`, une vraie requête HTTP à la fois.
+envoie les clients vers `/predict`, une vraie requête HTTP à la fois. Les
+valeurs manquantes ne sont comblées que pour les colonnes **requises** par
+le schéma MLflow (résolu via `Model.load()`, léger — ne charge pas le
+pickle complet du modèle) ; les colonnes optionnelles gardent leurs vrais
+NaN, pour ne pas fausser artificiellement l'analyse de dérive avec un
+pattern de missingness qui n'existerait pas en vraie production.
 L'option `--invalid-requests N` ajoute N payloads volontairement invalides
 (copies des premiers, avec `AMT_INCOME_TOTAL` retiré) afin de tester la
 journalisation des erreurs `422` — en plus de `--sample-size`, pas dedans.

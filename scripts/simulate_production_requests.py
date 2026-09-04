@@ -15,7 +15,10 @@ from urllib.request import Request, urlopen
 import numpy as np
 import pandas as pd
 
+from mlflow.models import Model
+
 from app.schemas.prediction import BINARY_FLAG_COLUMNS, EXT_SOURCE_UNIT_INTERVAL_COLUMNS
+from app.services.model_service import resolve_model_source
 from home_credit_mlops.data.io import read_table
 from home_credit_mlops.logging_utils import configure_logging
 from home_credit_mlops.settings import load_settings
@@ -87,23 +90,6 @@ def _row_to_payload(row: pd.Series, *, drop_columns: set[str]) -> dict[str, Any]
     return payload
 
 
-def _fallback_for_column(series: pd.Series) -> Any:
-    """Calcule une valeur de repli stable pour produire un payload valide."""
-
-    if pd.api.types.is_bool_dtype(series):
-        return False
-    if pd.api.types.is_numeric_dtype(series):
-        finite_values = series.replace([np.inf, -np.inf], np.nan).dropna()
-        if finite_values.empty:
-            return 0.0
-        return finite_values.median()
-
-    mode = series.dropna().mode()
-    if mode.empty:
-        return "missing"
-    return mode.iloc[0]
-
-
 def _enforce_business_safe_values(frame: pd.DataFrame) -> pd.DataFrame:
     """Aligne les donnees simulees avec les validations metier de l'API."""
 
@@ -158,16 +144,75 @@ def _enforce_business_safe_values(frame: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
-def _prepare_valid_simulation_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """Nettoie les inputs avant simulation pour eviter des erreurs 422 non voulues."""
+def _resolve_required_columns() -> set[str] | None:
+    """Lit la signature MLflow (sans charger le pickle complet) pour savoir
+    quelles colonnes le schema Pydantic de l'API rejette si elles sont nulles.
+
+    `Model.load()` ne lit que le petit fichier `MLmodel`, pas le modele
+    pickle de 130 Mo (pas de `mlflow.pyfunc.load_model`) : rapide, et
+    reutilise `resolve_model_source` (donc le cache local si deja
+    telecharge) plutot que de dupliquer la logique de resolution.
+    """
+
+    try:
+        settings = load_settings()
+        local_dir = resolve_model_source(settings.serving)
+        schema = Model.load(local_dir.as_posix()).signature.inputs
+        return {col_spec.name for col_spec in schema.inputs if col_spec.required}
+    except Exception:
+        LOGGER.exception(
+            "Could not resolve the model's required columns; falling back to "
+            "filling every missing value (may erase real missingness patterns "
+            "and inflate data drift artificially)."
+        )
+        return None
+
+
+def _fallback_value_for_column(series: pd.Series) -> Any:
+    """Valeur de repli stable pour un champ requis, calculee sur les valeurs
+    non manquantes de la colonne (mediane pour le numerique, mode sinon)."""
+
+    if pd.api.types.is_bool_dtype(series):
+        return False
+    if pd.api.types.is_numeric_dtype(series):
+        finite_values = series.replace([np.inf, -np.inf], np.nan).dropna()
+        if finite_values.empty:
+            return 0.0
+        return finite_values.median()
+
+    mode = series.dropna().mode()
+    if mode.empty:
+        return "missing"
+    return mode.iloc[0]
+
+
+def _prepare_valid_simulation_frame(
+    frame: pd.DataFrame, *, required_columns: set[str] | None
+) -> pd.DataFrame:
+    """Nettoie les inputs avant simulation pour eviter des erreurs 422 non voulues.
+
+    Ne remplit les NaN que pour les colonnes requises par le schema MLflow
+    (`required_columns`, resolu via `_resolve_required_columns`) : la
+    majorite des colonnes optionnelles ont de vraies valeurs manquantes a
+    l'entrainement (ex. CC_*/BURO_* agregees, absentes si le client n'a pas
+    de carte de credit). Les remplir ecraserait ce pattern de missingness
+    reel et fausserait l'analyse de derive (PSI/KS gonfles artificiellement,
+    sans rapport avec une vraie derive de production). Si la resolution du
+    schema a echoue (`required_columns is None`), repli sur l'ancien
+    comportement (tout remplir) pour ne jamais casser la simulation.
+    """
 
     features = frame.drop(
         columns=[column for column in DROP_COLUMNS if column in frame.columns]
     ).copy()
     features = features.replace([np.inf, -np.inf], np.nan)
 
-    for column in features.columns:
-        features[column] = features[column].fillna(_fallback_for_column(features[column]))
+    columns_to_fill = (
+        features.columns if required_columns is None else required_columns.intersection(features.columns)
+    )
+    for column in columns_to_fill:
+        if features[column].isna().any():
+            features[column] = features[column].fillna(_fallback_value_for_column(features[column]))
 
     return _enforce_business_safe_values(features)
 
@@ -225,7 +270,8 @@ def _build_payloads(
     if frame.empty:
         return []
 
-    valid_features = _prepare_valid_simulation_frame(frame)
+    required_columns = _resolve_required_columns()
+    valid_features = _prepare_valid_simulation_frame(frame, required_columns=required_columns)
     sample = valid_features.sample(
         n=min(sample_size, len(frame)),
         random_state=random_state,
