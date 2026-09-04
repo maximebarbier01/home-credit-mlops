@@ -63,5 +63,10 @@ jobs:
         # configure (Render > service > Settings > Deploy Hook). Sans lui,
         # cette etape est un no-op silencieux : le pipeline reste utilisable
         # sans hebergement externe (voir README, "Pourquoi ghcr.io").
-        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
-        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+        # Le contexte `secrets` n'est pas autorise directement dans `if:`
+        # (erreur "Unrecognized named-value: 'secrets'") : on le passe donc
+        # par `env:`, seul contexte fiable dans une condition `if:` de step.
+        if: ${{ env.RENDER_DEPLOY_HOOK_URL != '' }}
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"
