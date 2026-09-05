@@ -26,6 +26,7 @@ from app.services.model_service import (
     load_scoring_model,
     resolve_model_source,
 )
+from app.schemas.technical import HealthResponse, RootResponse
 from app.services.prediction_service import PredictionRepository, PredictionService
 from home_credit_mlops.logging_utils import configure_logging
 from home_credit_mlops.settings import Settings, load_settings
@@ -212,15 +213,15 @@ def create_app(
         LOGGER.exception("Unhandled error while processing request", exc_info=exc)
         return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
-    @app.get("/", tags=["technical"])
-    async def root() -> dict[str, str]:
-        return {"message": "Home Credit Scoring API"}
+    @app.get("/", tags=["technical"], response_model=RootResponse)
+    async def root() -> RootResponse:
+        return RootResponse(message="Home Credit Scoring API")
 
-    @app.get("/health", tags=["technical"])
-    async def health() -> dict[str, Any]:
+    @app.get("/health", tags=["technical"], response_model=HealthResponse)
+    async def health() -> HealthResponse:
         model_service = getattr(app.state, "model_service", None)
         model_loaded = bool(model_service and model_service.is_loaded)
-        return {"status": "ok", "model_loaded": model_loaded}
+        return HealthResponse(status="ok", model_loaded=model_loaded)
 
     return app
 
