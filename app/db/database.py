@@ -34,7 +34,20 @@ def configure_database(database_url: str) -> Engine:
         sqlite_path.parent.mkdir(parents=True, exist_ok=True)
         connect_args = {"check_same_thread": False}
 
-    _engine = create_engine(database_url, connect_args=connect_args)
+    _engine = create_engine(
+        database_url,
+        connect_args=connect_args,
+        # pool_pre_ping : teste chaque connexion (SELECT leger) avant de la
+        # reutiliser, et la remplace silencieusement si elle est morte.
+        # Necessaire avec un Postgres serverless comme Neon, qui suspend son
+        # calcul apres inactivite et coupe les connexions deja ouvertes -
+        # sans ca, la premiere requete apres une suspension echoue avec
+        # "SSL connection has been closed unexpectedly" (constate en
+        # conditions reelles sur Render). pool_recycle recycle aussi les
+        # connexions proactivement avant la fenetre d'inactivite de Neon.
+        pool_pre_ping=True,
+        pool_recycle=280,
+    )
     SessionLocal.configure(bind=_engine)
     return _engine
 
